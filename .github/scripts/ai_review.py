@@ -60,6 +60,24 @@ def log(msg):
     print(msg, flush=True)
 
 
+def annotate(level, msg):
+    """GitHub 注解：会显示在 Run 页面顶部的 Annotations 区块，不用翻日志。"""
+    print("::%s::%s" % (level, msg.replace("\n", " ")[:900]), flush=True)
+    log(msg)
+
+
+def write_summary(lines):
+    """写到 Run 的 Summary 页面，失败原因一眼可见。"""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
 def http(method, url, token=None, data=None, accept="application/vnd.github+json", raw=False, timeout=120):
     """最小 HTTP 封装：只用标准库。raw=True 时返回文本（用于取 diff）。"""
     body = None
@@ -147,7 +165,14 @@ def upsert_comment(repo, number, token, body, dry_run=False):
         log("已把评审意见贴到 PR #%d" % number)
         return "created"
     except urllib.error.HTTPError as exc:
-        log("发评论失败（%s）：%s" % (exc.code, exc.read()[:300]))
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        annotate("error", "发评论失败（HTTP %s）：%s%s" % (
+            exc.code, detail,
+            "  ← 需要 Actions 写权限：Settings → Actions → General → Workflow permissions 选 Read and write"
+            if exc.code in (403, 404) else ""))
+        return "failed"
+    except (urllib.error.URLError, OSError) as exc:
+        annotate("error", "发评论失败（网络）：%s" % exc)
         return "failed"
 
 
@@ -167,8 +192,8 @@ def main():
         try:
             raw = open(a.diff_file, "rb").read()
         except OSError as exc:
-            log("读取 diff 文件失败：%s" % exc)
-            return 0
+            annotate("error", "读取 diff 文件失败：%s" % exc)
+            return 1
         # PowerShell 的 > 默认写 UTF-16LE，这里自动识别，免得解析出 0 个文件
         if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
             diff = raw.decode("utf-16", "replace")
@@ -180,8 +205,8 @@ def main():
         pr = {"title": (os.environ.get("PR_TITLE") or "（本地预演）"), "body": ""}
     else:
         if not token or not repo:
-            log("缺少 GITHUB_TOKEN / GITHUB_REPOSITORY，跳过")
-            return 0
+            annotate("error", "缺少 GITHUB_TOKEN / GITHUB_REPOSITORY，无法拉 diff 或发评论")
+            return 1
         forced = (os.environ.get("PR_NUMBER") or "").strip()
         if forced.isdigit():
             # 手动触发（workflow_dispatch）时直接指定 PR 号
@@ -192,18 +217,23 @@ def main():
                 with open(event_path, "r", encoding="utf-8") as fh:
                     event = json.load(fh)
             except OSError as exc:
-                log("读取事件负载失败：%s" % exc)
-                return 0
+                annotate("error", "读取事件负载失败：%s" % exc)
+                return 1
             pr = event.get("pull_request") or {}
             number = pr.get("number") or event.get("number")
         if not number:
-            log("不是 PR 事件，跳过（手动触发请填 pr 输入项）")
+            annotate("warning", "不是 PR 事件，跳过（手动触发请在输入框填 PR 编号）")
             return 0
-        diff = http("GET", "%s/repos/%s/pulls/%d" % (GITHUB_API, repo, number),
-                    token=token, accept="application/vnd.github.v3.diff", raw=True)
+        try:
+            diff = http("GET", "%s/repos/%s/pulls/%d" % (GITHUB_API, repo, number),
+                        token=token, accept="application/vnd.github.v3.diff", raw=True)
+        except urllib.error.HTTPError as exc:
+            annotate("error", "拉取 PR #%s 的 diff 失败（HTTP %s）：%s" % (
+                number, exc.code, exc.read().decode("utf-8", "replace")[:200]))
+            return 1
 
     if not diff.strip():
-        log("diff 为空，跳过")
+        annotate("warning", "diff 为空（本次提交没有代码改动），跳过")
         return 0
 
     files, add, dele = changed_files(diff)
@@ -213,7 +243,13 @@ def main():
         log("!! 检出疑似密钥 %d 处" % len(secrets_found))
 
     if not api_key:
-        log("未配置 REVIEW_API_KEY（仓库 Secret: DEEPSEEK_API_KEY），跳过 AI 审查")
+        # 未配置不算错误（不该把 PR 变红），但必须在 Annotations 里看得见
+        annotate("warning", "未配置 REVIEW_API_KEY：请到 Settings → Secrets and variables → Actions "
+                            "新建 Repository secret，名字必须正好是 DEEPSEEK_API_KEY")
+        write_summary(["## 🤖 自动代码审查未运行", "",
+                       "原因：没有拿到 REVIEW_API_KEY。", "",
+                       "请在仓库 Settings → Secrets and variables → Actions 里新建 Repository secret，"
+                       "名字必须是 DEEPSEEK_API_KEY。"])
         return 0
 
     limit = int(os.environ.get("REVIEW_MAX_DIFF") or 60000)
@@ -224,6 +260,7 @@ def main():
 
     base = (os.environ.get("REVIEW_API_BASE") or "https://api.deepseek.com/v1").rstrip("/")
     model = os.environ.get("REVIEW_MODEL") or "deepseek-chat"
+    log("调用模型：%s @ %s（密钥已配置）" % (model, base))
     payload = {"model": model,
                "messages": [{"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": user}],
@@ -233,15 +270,18 @@ def main():
                    accept="application/json", timeout=180)
         review = (out["choices"][0]["message"]["content"] or "").strip()
     except urllib.error.HTTPError as exc:
-        log("模型接口返回 %s：%s" % (exc.code, exc.read()[:500]))
-        return 0
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        tip = {401: "密钥无效", 402: "余额不足（可改用硅基流动：设 REVIEW_API_BASE / REVIEW_MODEL 变量）",
+               429: "被限流，稍后重试"}.get(exc.code, "")
+        annotate("error", "模型接口返回 HTTP %s%s：%s" % (exc.code, ("（%s）" % tip) if tip else "", detail))
+        return 1
     except (urllib.error.URLError, KeyError, IndexError, ValueError) as exc:
-        log("调用模型失败：%s" % exc)
-        return 0
+        annotate("error", "调用模型失败：%s" % exc)
+        return 1
 
     if not review:
-        log("模型返回空内容，跳过")
-        return 0
+        annotate("error", "模型返回空内容")
+        return 1
 
     review = redact(review)      # 模型可能把密钥原文抄进评审，先脱敏再打印/发布
     log(review)
@@ -262,15 +302,14 @@ def main():
                % (MARKER, model, len(files), add, dele,
                   "（diff 过长已截断）" if truncated else "", files_md, secret_md, review))
 
-    upsert_comment(repo, number, token, redact(comment), dry_run=a.dry_run)
-
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary_path:
-        try:
-            with open(summary_path, "a", encoding="utf-8") as fh:
-                fh.write("## 自动代码审查\n\n" + review + "\n")
-        except OSError:
-            pass
+    status = upsert_comment(repo, number, token, redact(comment), dry_run=a.dry_run)
+    write_summary(["## 🤖 自动代码审查", "",
+                   "模型 %s ｜ 改动 %d 个文件 +%d/-%d ｜ 评论状态：%s%s" % (
+                       model, len(files), add, dele, status,
+                       " ｜ ⚠️ 检出疑似密钥 %d 处" % len(secrets_found) if secrets_found else ""),
+                   "", review])
+    if status == "failed":
+        return 1
     return 0
 
 
