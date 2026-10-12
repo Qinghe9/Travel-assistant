@@ -153,7 +153,10 @@ KEYWORD_MIN_COVERAGE = float(_env("RAG_KEYWORD_MIN_COVERAGE", "0.0"))
 
 # 多轮对话
 DIALOGUE_MAX_TURNS = int(_env("RAG_DIALOGUE_MAX_TURNS", "6"))
-DIALOGUE_REWRITE = _env("RAG_DIALOGUE_REWRITE", "1") not in ("0", "false", "False", "")
+# 追问改写模式：auto=先用 LLM（有预算）超时回落规则式 | llm=只用 LLM | rule=只用规则式(零延迟) | off=不改写
+# 实测规则式（把继承的城市拼进问句）与 LLM 改写的检索信号等价（余弦差 <0.005、Top3 大量重合），
+# 所以 DIALOGUE_REWRITE=rule 可以把追问的 ~0.5s 改写开销直接省掉。
+DIALOGUE_REWRITE = _env("RAG_DIALOGUE_REWRITE", "auto")
 
 # 接地校验（逐句蕴含检查）：默认开，失败自动降级
 FAITHFULNESS_CHECK = _env("RAG_FAITHFULNESS_CHECK", "1") not in ("0", "false", "False", "")
@@ -166,7 +169,8 @@ FAITHFULNESS_CHECK = _env("RAG_FAITHFULNESS_CHECK", "1") not in ("0", "false", "
 # 这样**即使生成超时**，抽取式兜底也能在预算内返回有据可查的答案。
 ANSWER_TIMEOUT = float(_env("RAG_ANSWER_TIMEOUT", "1.5"))
 # 多轮改写超时：超时就用原问句检索（大概率仍可召回）
-DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "1.0"))
+# 0.6s：超过就用规则式改写（检索等价、零延迟），别让一次改写吃掉 2 秒预算的三分之一
+DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "0.6"))
 # 接地校验：句子实词在**被引证据**里的覆盖率低于该值即判为编造、整句剔除；
 # 另外句中的数字（票价/时刻/电话）必须逐字出现在证据里。
 # 0.35：词面覆盖对"合法复述"天然偏低（实测 0.33 的句子其实有据），

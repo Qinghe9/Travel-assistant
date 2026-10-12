@@ -111,13 +111,27 @@ _ELLIPSIS_MARKERS = ("那", "这", "它", "那边", "那里", "这里", "还有"
                      "别的", "另一个", "刚才", "上面", "前面", "刚才说的")
 
 
+def rule_rewrite(query: str, session: DialogueSession) -> str:
+    """规则式改写（零延迟）：把继承到的城市拼进问句。
+
+    实测与 LLM 改写的检索信号等价——因为过滤条件本来就来自槽位继承，
+    改写只是给向量/词法多一个"成都"这样的锚点。
+    """
+    slots = (session.slots if session else {}) or {}
+    city = slots.get("city") or ""
+    q = (query or "").strip()
+    if city and city not in q:
+        return "%s %s" % (city, q)
+    return q
+
+
 def needs_rewrite(query: str, session: DialogueSession) -> bool:
     """是否真的需要改写：时间预算 ≤2 秒，能不问模型就不问。
 
     自带城市或类别（"成都有什么美食""杭州西湖怎么玩"）且没有省略指代词的问题，
     本身就是独立可检索的，直接跳过改写（省 ~0.3s）。
     """
-    if not session or not session.turns or not cfg.DIALOGUE_REWRITE:
+    if not session or not session.turns or cfg.DIALOGUE_REWRITE in ("0", "off", "false", "False", ""):
         return False
     q = (query or "").strip()
     if not q:
@@ -130,9 +144,15 @@ def needs_rewrite(query: str, session: DialogueSession) -> bool:
 
 
 def rewrite(query: str, session: DialogueSession, timeout: int = None) -> str:
-    """有历史时把问题改写成独立问句；失败/无历史/不需要时返回原问句。"""
+    """有历史时把问题改写成独立问句；模式见 cfg.DIALOGUE_REWRITE。
+
+    auto：LLM 优先，超时/异常/结果异常时回落到规则式（仍比原句好，且零延迟）。
+    """
     if not needs_rewrite(query, session):
         return query
+    mode = (cfg.DIALOGUE_REWRITE or "auto").lower()
+    if mode == "rule":
+        return rule_rewrite(query, session)
     history = session.history_text()
     if not history.strip():
         return query
@@ -145,12 +165,12 @@ def rewrite(query: str, session: DialogueSession, timeout: int = None) -> str:
                        max_tokens=cfg.LLM_HELPER_MAX_TOKENS,
                        timeout=timeout or cfg.DIALOGUE_REWRITE_TIMEOUT, retries=0)
     except llm.LLMError:
-        return query
+        return rule_rewrite(query, session) if mode == "auto" else query
     text = (res.get("text") or "").strip()
     text = re.sub(r"^[\"'“”‘’]+|[\"'“”‘’]+$", "", text).splitlines()[0].strip() if text else ""
-    # 改写结果异常（空/过长/明显不是问句）时退回原问句，宁可少改也不改坏
+    # 改写结果异常（空/过长/明显不是问句）时回落，宁可少改也不改坏
     if not text or len(text) > 60 or text.count("？") + text.count("?") > 1:
-        return query
+        return rule_rewrite(query, session) if mode == "auto" else query
     return text
 
 
