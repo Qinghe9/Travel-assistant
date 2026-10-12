@@ -1,5 +1,8 @@
 # 旅游规划助手 · RAG 模块
 
+[![CI](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ci.yml)
+[![代码自动审查](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ai-review.yml/badge.svg)](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ai-review.yml)
+
 面向《人工智能创新开发实践》课程设计的旅游规划助手 RAG 部分：把维基导游、GeoNames、ChinaTravel 等公开数据建成**可追溯**的知识库，提供「采集 → 清洗 → 切分 → 混合检索 → 证据绑定 → 生成 → 引用校验」的端到端链路，并对 Recall@3、MRR、无关知识引入、证据绑定率、检索时延做自动评测。
 
 | 文档 | 说明 |

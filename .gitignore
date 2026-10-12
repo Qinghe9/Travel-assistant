@@ -20,6 +20,9 @@ data/*
 
 # ===== 工具与临时产物 =====
 .dsh/
+.dsh-setup/
+.dsh-verify/
 .tmp_smoke/
 .tmp_ms/
+.commitmsg
 *.part
