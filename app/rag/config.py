@@ -134,7 +134,11 @@ LLM_HELPER_MODEL = _env("RAG_LLM_HELPER_MODEL", "inclusionAI/Ling-mini-2.0")
 LLM_HELPER_MAX_TOKENS = int(_env("RAG_LLM_HELPER_MAX_TOKENS", "32"))   # 改写只输出一句问句
 
 # 重排序：bge-reranker-v2-m3 实测 ~255ms（3 篇），免费档可用
-RERANK_ENABLED = _env("RAG_RERANK_ENABLED", "1") not in ("0", "false", "False", "")
+# 默认关闭：实测在**带过滤的产品路径**上重排零增益（不重排的基线 Top3 命中率已是 1.000，
+# MRR 还更高 0.9602 vs 0.9516），却要多花 ~300ms 并引入一个网络故障点。
+# 只有"无过滤(open)"场景才有价值（Recall@3 0.871→0.923，且需 RERANK_CANDIDATES>=20）；
+# 需要时用 RAG_RERANK_ENABLED=1 打开。
+RERANK_ENABLED = _env("RAG_RERANK_ENABLED", "0") not in ("0", "false", "False", "")
 RERANK_BASE_URL = _env("RAG_RERANK_BASE_URL", SF_BASE_URL)
 RERANK_API_KEY = _env("RAG_RERANK_API_KEY", SF_API_KEY)
 RERANK_MODEL = _env("RAG_RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
