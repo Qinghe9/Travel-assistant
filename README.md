@@ -73,6 +73,12 @@ python evals/run_rag_eval.py --mode both
 
 > fork 发起的 PR 拿不到仓库 Secret，AI 审查会自动跳过。
 
+## 贡献与分支约定
+
+- `main` 只接受通过 PR 合入。
+- 每个 PR 自动跑两道门：**CI**（ruff 高信号规则 + 全量语法编译 + 离线冒烟）与**代码自动审查**（ruff 把问题标注到改动行；配置 `DEEPSEEK_API_KEY` 后模型还会给出评审意见并回帖）。
+- 提交信息建议写成 `<type>(<scope>): <subject>`，type 取 feat / fix / docs / chore / refactor。
+
 ## 许可
 
 数据来源与许可见 [NOTICE](NOTICE)；其中 CC BY-SA / CC BY-NC 等条款在公开或商用场景下需按 NOTICE 声明。
