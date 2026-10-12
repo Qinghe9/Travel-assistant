@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""召回：向量召回 + BM25 召回（元数据过滤下推到召回层）。"""
+"""召回：向量召回 + BM25 召回（元数据过滤下推到召回层）。
+
+热索引（hot_index.py）可用时走内存路径：向量暴力余弦 + 倒排候选打分 + 元数据查表，
+把单次检索从 ~480ms 压到 ~40ms；构建失败自动回退到下面的 Chroma 路径。
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ import pickle
 
 from app.rag import config as cfg
 from app.rag.indexing.embed import Embedder
+from app.rag.retrieval import hot_index
 
 _EMB = None
 _BM25 = None
@@ -39,12 +44,13 @@ def bm25_pack():
 
 
 def warmup():
-    """服务启动时调用：预热 jieba、BM25、向量器，并真跑一次检索把 Chroma 客户端初始化掉。
+    """服务启动时调用：预热 jieba、BM25、向量器、热索引，并真跑一次检索把链路打通。
     不做这一步，首个真实请求要额外付 3-12 秒冷启动（实测）。"""
     import jieba
     jieba.initialize()
-    bm25_pack()
+    pack = bm25_pack()
     embedder()
+    hot_index.build(pack, verbose=True)   # 装进内存；失败自动回退 Chroma
     try:
         from app.rag.retrieval.fuse import search_with_score
         search_with_score("预热查询", top_k=1)
@@ -65,11 +71,17 @@ def vector_search(query: str, top_k: int = None, city: str = None, category: str
                   province: str = None, source_type: str = None):
     """返回 [{chunk_id, text, score_vector, metadata}]，按相似度降序。"""
     import time
-    from app.rag.indexing.build import get_client
     top_k = top_k or cfg.TOP_K_VECTOR
     t0 = time.perf_counter()
     vec = embedder().embed_texts([query])[0]
     TIMING["embed_ms"] += (time.perf_counter() - t0) * 1000
+    if hot_index.ready():          # 内存暴力余弦：实测 126ms -> ~5ms
+        t1 = time.perf_counter()
+        out = hot_index.vector_search(vec, top_k, {"city": city, "category": category,
+                                                   "province": province, "source_type": source_type})
+        TIMING["vector_ms"] += (time.perf_counter() - t1) * 1000
+        return out
+    from app.rag.indexing.build import get_client
     col = get_client().get_collection(cfg.COLLECTION)
     t1 = time.perf_counter()
     res = col.query(query_embeddings=[vec], n_results=top_k,
@@ -93,19 +105,31 @@ def bm25_search(query: str, top_k: int = None, city: str = None, category: str =
     pack = bm25_pack()
     top_k = top_k or cfg.TOP_K_BM25
     t0 = time.perf_counter()
-    scores = pack["bm25"].get_scores(list(jieba.cut(query)))
+    terms = list(jieba.cut(query))
+    if hot_index.ready():          # 倒排候选打分：实测 130ms -> ~10ms
+        out = hot_index.bm25_search(terms, top_k)
+        TIMING["bm25_ms"] += (time.perf_counter() - t0) * 1000
+        return out
+    scores = pack["bm25"].get_scores(terms)
     TIMING["bm25_ms"] += (time.perf_counter() - t0) * 1000
     order = sorted(range(len(scores)), key=lambda i: -scores[i])[: top_k * 6]
     return [{"chunk_id": pack["ids"][i], "score_bm25": float(scores[i])} for i in order]
 
 
 def load_meta(chunk_ids):
-    """从 Chroma 取元数据与正文（首次调用会初始化 Chroma 客户端，计入 meta_ms）。"""
+    """取元数据与正文：热索引命中则查内存，缺失的才回 Chroma（计入 meta_ms）。"""
     import time
-    from app.rag.indexing.build import get_client
+    ids = list(chunk_ids)
     t0 = time.perf_counter()
-    col = get_client().get_collection(cfg.COLLECTION)
-    res = col.get(ids=list(chunk_ids), include=["documents", "metadatas"])
+    out, missing = {}, ids
+    if hot_index.ready():
+        out = hot_index.lookup(ids)
+        missing = [cid for cid in ids if cid not in out]
+    if missing:
+        from app.rag.indexing.build import get_client
+        col = get_client().get_collection(cfg.COLLECTION)
+        res = col.get(ids=list(missing), include=["documents", "metadatas"])
+        out.update({cid: {"text": doc, "metadata": meta}
+                    for cid, doc, meta in zip(res["ids"], res["documents"], res["metadatas"])})
     TIMING["meta_ms"] += (time.perf_counter() - t0) * 1000
-    return {cid: {"text": doc, "metadata": meta}
-            for cid, doc, meta in zip(res["ids"], res["documents"], res["metadatas"])}
+    return out

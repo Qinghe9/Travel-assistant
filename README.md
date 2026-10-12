@@ -45,6 +45,21 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
 
 检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）只在本机保留，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
 
+## 检索性能（进程内热索引）
+
+[app/rag/retrieval/hot_index.py](app/rag/retrieval/hot_index.py) 把向量矩阵、正文元数据、词法倒排一次性装进内存，检索阶段从「Chroma 往返 + 全库 BM25 打分」变成「内存矩阵乘法 + 倒排候选」：
+
+| 阶段 | 热索引前 | 热索引后 |
+|---|---|---|
+| 向量召回 | 126 ms | ~11 ms |
+| BM25 召回 | 129 ms | ~5 ms |
+| 元数据回表 | 117 ms | ~0.2 ms |
+| **单次检索** | **476 ms（P95 686）** | **19 ms（P95 21）** |
+
+- 由 `recall.warmup()` 构建（长驻服务启动时调用一次），构建失败自动回退 Chroma 路径；
+- 向量首次从 Chroma 拉全量后缓存到 `data/index/hot_vectors.npz`，随 `index_version` 失效重取；
+- 评测门禁已补上「检索时延 P95 ≤ 300ms」——此前只是文档里的指标，没有门禁守着。
+
 ## 数据与文档不入库
 
 [.gitignore](.gitignore) 排除了 `data/`（原始快照、清洗产物、向量库与 manifest，约 1 GB）、`docs/`、`evals/`、`prd_assets/`、`rag_assets/`、`prd_render*/`、`*.docx` 等，本机按上面的命令重建。
