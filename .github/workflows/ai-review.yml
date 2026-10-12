@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:          # 支持手动跑一次，方便先验证配置是否生效
+    inputs:
+      pr:
+        description: PR 编号（手动跑时填，例如 2）
+        required: false
 
 permissions:
   contents: read
@@ -67,9 +71,10 @@ jobs:
               for pat, label in pats:
                   m = re.search(pat, line[1:])
                   if m:
-                      hits.append((path, label, m.group(0)[:20] + "..."))
-          for p, label, s in hits:
-              print("::error file=%s::%s %s" % (p, label, s))
+                      hits.append((path, label, len(m.group(0))))
+          for p, label, n in hits:
+              # 只报位置和类型，绝不回显命中内容（日志和评论都是公开的）
+              print("::error file=%s::%s（命中 %d 字符，内容不展示）" % (p, label, n))
           if hits:
               print("检出 %d 处疑似密钥，请删除并轮换后再提交。" % len(hits))
               sys.exit(1)
@@ -95,4 +100,5 @@ jobs:
           REVIEW_API_BASE: ${{ vars.REVIEW_API_BASE || 'https://api.deepseek.com/v1' }}
           REVIEW_MODEL: ${{ vars.REVIEW_MODEL || 'deepseek-chat' }}
           REVIEW_MAX_DIFF: ${{ vars.REVIEW_MAX_DIFF || '60000' }}
+          PR_NUMBER: ${{ inputs.pr }}
         run: python .github/scripts/ai_review.py

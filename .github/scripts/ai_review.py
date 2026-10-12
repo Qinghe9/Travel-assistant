@@ -78,20 +78,41 @@ def http(method, url, token=None, data=None, accept="application/vnd.github+json
 
 
 def scan_secrets(diff):
-    """在新增行里找密钥特征。返回 [(路径, 说明, 命中片段)]。"""
-    hits, path = [], ""
+    """在新增行里找密钥特征。
+
+    返回 [(路径, 说明, 命中长度)] —— **故意不回显命中内容**：
+    评论是公开的，把密钥片段贴上去等于二次泄漏。只报告位置和类型。
+    """
+    hits, path, lineno = [], "", 0
     for line in diff.splitlines():
         if line.startswith("+++ b/"):
             path = line[6:].strip()
             continue
-        if not line.startswith("+") or line.startswith("+++"):
+        if line.startswith("+++"):
             continue
-        body = line[1:]
+        if line.startswith("@@"):
+            m = re.search(r"\+(\d+)", line)
+            lineno = int(m.group(1)) if m else 0
+            continue
+        if line.startswith("-"):
+            continue                       # 删除行不占新文件的行号
+        if not line.startswith("+"):
+            lineno += 1                    # 上下文行也占一行
+            continue
+        here = lineno                      # 本行在新文件里的行号
+        lineno += 1
         for pat, label in SECRET_PATTERNS:
-            m = pat.search(body)
+            m = pat.search(line[1:])
             if m:
-                hits.append((path, label, m.group(0)[:24] + "…"))
+                hits.append(("%s:%d" % (path, here), label, len(m.group(0))))
     return hits
+
+
+def redact(text):
+    """兜底脱敏：模型很可能在评审里把密钥原文抄一遍，贴到公开评论就成了二次泄漏。"""
+    for pat, _ in SECRET_PATTERNS:
+        text = pat.sub("[已隐藏疑似密钥]", text)
+    return text
 
 
 def changed_files(diff):
@@ -144,25 +165,39 @@ def main():
     pr, number, diff = {}, None, ""
     if a.diff_file:
         try:
-            diff = open(a.diff_file, "r", encoding="utf-8", errors="replace").read()
+            raw = open(a.diff_file, "rb").read()
         except OSError as exc:
             log("读取 diff 文件失败：%s" % exc)
             return 0
+        # PowerShell 的 > 默认写 UTF-16LE，这里自动识别，免得解析出 0 个文件
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            diff = raw.decode("utf-16", "replace")
+        elif b"\x00" in raw[:200]:
+            diff = raw.decode("utf-16-le", "replace")
+        else:
+            diff = raw.decode("utf-8", "replace")
+        log("本地预演模式（--diff-file），不会发评论")
         pr = {"title": (os.environ.get("PR_TITLE") or "（本地预演）"), "body": ""}
     else:
         if not token or not repo:
             log("缺少 GITHUB_TOKEN / GITHUB_REPOSITORY，跳过")
             return 0
-        try:
-            with open(event_path, "r", encoding="utf-8") as fh:
-                event = json.load(fh)
-        except OSError as exc:
-            log("读取事件负载失败：%s" % exc)
-            return 0
-        pr = event.get("pull_request") or {}
-        number = pr.get("number") or event.get("number")
+        forced = (os.environ.get("PR_NUMBER") or "").strip()
+        if forced.isdigit():
+            # 手动触发（workflow_dispatch）时直接指定 PR 号
+            number = int(forced)
+            pr = http("GET", "%s/repos/%s/pulls/%d" % (GITHUB_API, repo, number), token=token)
+        else:
+            try:
+                with open(event_path, "r", encoding="utf-8") as fh:
+                    event = json.load(fh)
+            except OSError as exc:
+                log("读取事件负载失败：%s" % exc)
+                return 0
+            pr = event.get("pull_request") or {}
+            number = pr.get("number") or event.get("number")
         if not number:
-            log("不是 PR 事件，跳过")
+            log("不是 PR 事件，跳过（手动触发请填 pr 输入项）")
             return 0
         diff = http("GET", "%s/repos/%s/pulls/%d" % (GITHUB_API, repo, number),
                     token=token, accept="application/vnd.github.v3.diff", raw=True)
@@ -208,15 +243,18 @@ def main():
         log("模型返回空内容，跳过")
         return 0
 
+    review = redact(review)      # 模型可能把密钥原文抄进评审，先脱敏再打印/发布
     log(review)
     files_md = "\n".join("- %s" % f for f in files[:30])
     if len(files) > 30:
         files_md += "\n- ……另有 %d 个文件" % (len(files) - 30)
     secret_md = ""
     if secrets_found:
-        secret_md = ("\n### 🔴 密钥扫描未通过\n\n检出疑似密钥 %d 处，请立刻删除并**轮换**该密钥：\n\n%s\n"
+        # 只给位置与类型，绝不回显命中内容：评论是公开的，贴出片段等于二次泄漏
+        secret_md = ("\n### 🔴 密钥扫描未通过\n\n检出疑似密钥 %d 处，请立刻删除并**轮换**该密钥"
+                     "（为避免二次泄漏，此处不展示命中内容）：\n\n%s\n"
                      % (len(secrets_found),
-                        "\n".join("- %s：%s（%s）" % (p, l, s) for p, l, s in secrets_found[:10])))
+                        "\n".join("- %s：%s（命中 %d 字符）" % it for it in secrets_found[:10])))
     comment = ("%s\n## 🤖 自动代码审查（%s）\n\n**改动**：%d 个文件，+%d/-%d 行%s\n\n"
                "<details><summary>改动文件</summary>\n\n%s\n\n</details>\n%s\n### 评审意见\n\n%s\n\n---\n"
                "<sub>由 GitHub Actions 自动生成，仅供参考，不作为合并门禁；"
@@ -224,7 +262,7 @@ def main():
                % (MARKER, model, len(files), add, dele,
                   "（diff 过长已截断）" if truncated else "", files_md, secret_md, review))
 
-    upsert_comment(repo, number, token, comment, dry_run=a.dry_run)
+    upsert_comment(repo, number, token, redact(comment), dry_run=a.dry_run)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
