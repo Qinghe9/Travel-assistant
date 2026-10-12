@@ -41,8 +41,12 @@ def build_evidence(query: str, city: str = None, category: str = None, top_k: in
                               "province": md.get("province", ""), "city": md.get("city", ""),
                               "category": md.get("category", "")})
     sim = _R.LAST_SIM
+    # 与 fuse 的判据保持一致：**带过滤的查询不套 RRF 阈值**。
+    # 过滤后候选池变小、单路证据变多、融合分整体下移（单路第一名恒为 1/(k+1)≈0.0164 < 0.018），
+    # 在这里套阈值会把明明检索到的合理问题误判成"无证据"而拒答——实测多轮追问就是这种情况。
+    has_filter = bool(city or category)
     weak = bool(chunks) and (
-        (cfg.MIN_FUSED_SCORE and max_score < cfg.MIN_FUSED_SCORE)
+        (not has_filter and cfg.MIN_FUSED_SCORE and max_score < cfg.MIN_FUSED_SCORE)
         or (cfg.MIN_VECTOR_SIM and sim < cfg.MIN_VECTOR_SIM))
     index_version = ""
     if cfg.MANIFEST_FILE.exists():

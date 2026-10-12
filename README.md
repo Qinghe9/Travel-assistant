@@ -46,6 +46,25 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
 
 检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）都在仓库里，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
 
+## 检索架构：三路召回 + 重排 + 多轮
+
+| 环节 | 做法 | 实测 |
+|---|---|---|
+| 第 1 路 向量 | 内存暴力余弦（12k 已归一化向量） | ~5 ms |
+| 第 2 路 BM25 | 倒排候选 + numpy 向量化打分（与 rank_bm25 逐位一致） | ~4 ms |
+| 第 3 路 关键词/标题 | 标题倒排加权 + 关键词覆盖率，专治专名/景点名 | ~10 ms |
+| 融合 | RRF（按名次，避免分数量纲不可比），三路等权 | <1 ms |
+| 重排 | 硅基流动 `BAAI/bge-reranker-v2-m3`，失败自动退回融合序 | ~0.35 s |
+| 生成 | 硅基流动免费档 `inclusionAI/Ling-mini-2.0`（实测 p50 1.58 s、引用 100% 合规） | ~1.2 s |
+| 多轮 | 查询改写（省略追问补全）+ 槽位继承（城市/类别跨轮不丢） | ~0.5 s/追问 |
+
+- **重排的价值**：open 模式（不传过滤）Recall@3 0.8903→0.9226、MRR 0.7871→0.8398；把重排候选调到 20 效果最好（默认 8 是时延与质量折中）。
+- **类别过滤不可靠**：chunk 的 `category` 里 tips 占 53.9%（成都 66 个 chunk 里 food=0），硬过滤会把池子清空，
+  因此在 [fuse.py](app/rag/retrieval/fuse.py) 里做了「滤空就退回只按城市」的自动降级。
+- **端到端时延**：`python evals/run_e2e_latency.py`，p50 ≈1.7 s、均值 ≈2.0 s、P95 ≈2.9 s；
+  瓶颈是免费档 LLM 的延迟尖刺（单次偶发 3~8 s），检索侧只占 ~0.37 s。
+  生成超时会退化为**抽取式作答**（原文句 + 引用编号），保证"有据可查"而非报错。
+
 ## 检索性能（进程内热索引）
 
 [app/rag/retrieval/hot_index.py](app/rag/retrieval/hot_index.py) 把向量矩阵、正文元数据、词法倒排一次性装进内存，检索阶段从「Chroma 往返 + 全库 BM25 打分」变成「内存矩阵乘法 + 倒排候选」：

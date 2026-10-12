@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
-"""DeepSeek 对话模型客户端（OpenAI 兼容）。
+"""对话模型客户端（OpenAI 兼容），默认走硅基流动免费档。
 
 环境变量（config.py 读取）：
-    DEEPSEEK_API_KEY   必填
-    DEEPSEEK_BASE_URL  默认 https://api.deepseek.com
-    LLM_MODEL          默认 deepseek-chat
-    LLM_TIMEOUT        默认 15 秒
+    LLM_BASE_URL       默认硅基流动 https://api.siliconflow.cn/v1
+    LLM_API_KEY        缺省回退到 RAG_EMBED_API_KEY（同供应商）；换 DeepSeek 时配 DEEPSEEK_API_KEY
+    RAG_LLM_MODEL      默认 inclusionAI/Ling-mini-2.0（实测 p50 1.58s，引用 100% 合规）
+    LLM_TIMEOUT        默认 8 秒
     LLM_MAX_RETRY      默认 1 次重试
-    LLM_TEMPERATURE    默认 0.2（事实型回答，压低随机性）
+    LLM_RETRY_BACKOFF  默认 0.4 秒（端到端预算 2 秒，不能用指数退避）
+    LLM_TEMPERATURE    默认 0.2；接地作答时调用方显式传 0.0
 """
 
 from __future__ import annotations
@@ -65,5 +66,5 @@ def chat(messages, *, model=None, temperature=None, max_tokens=None, timeout=Non
         except Exception as e:  # noqa: BLE001 - 超时/网络
             last = LLMError(type(e).__name__, str(e)[:200], True)
         if attempt <= retries:
-            time.sleep(min(2 ** attempt, 4))
+            time.sleep(cfg.LLM_RETRY_BACKOFF)
     raise last or LLMError("unknown", "调用失败")

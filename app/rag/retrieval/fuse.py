@@ -55,6 +55,12 @@ def dedup_by_parent(items, max_per_parent: int = None):
     return out
 
 
+def _meta_match(meta: dict, item: dict, want: dict) -> bool:
+    """候选的元数据是否满足过滤条件（want 已去掉空值）。"""
+    md = (meta.get(item["chunk_id"], {}).get("metadata") or {})
+    return all(md.get(k) == val for k, val in want.items())
+
+
 def search_with_score(query: str, city: str = None, category: str = None, province: str = None,
                       top_k: int = None, source_type: str = None, min_score: float = None,
                       rerank: bool = None):
@@ -66,24 +72,31 @@ def search_with_score(query: str, city: str = None, category: str = None, provin
     has_filter = any(filters.values())
     use_rerank = cfg.RERANK_ENABLED if rerank is None else rerank
 
-    v = R.vector_search(query, city=city, category=category, province=province, source_type=source_type)
-    b = R.bm25_search(query, city=city, category=category, province=province, source_type=source_type)
-    kw = (R.keyword_search(query, city=city, category=category, province=province,
-                           source_type=source_type) if cfg.KEYWORD_ENABLED else [])
+    def _recall(cat):
+        vv = R.vector_search(query, city=city, category=cat, province=province, source_type=source_type)
+        bb = R.bm25_search(query, city=city, category=cat, province=province, source_type=source_type)
+        kk = (R.keyword_search(query, city=city, category=cat, province=province,
+                               source_type=source_type) if cfg.KEYWORD_ENABLED else [])
+        ids = [x["chunk_id"] for x in bb] + [x["chunk_id"] for x in kk]
+        mm = R.load_meta(ids) if ids else {}
+        if has_filter:                      # BM25/关键词路无内建过滤，按元数据后置筛
+            w = {k: val for k, val in filters.items() if val}
+            bb = [x for x in bb if _meta_match(mm, x, w)]
+            kk = [x for x in kk if _meta_match(mm, x, w)]
+        return vv, bb, kk, mm
+
+    v, b, kw, meta = _recall(category)
+    # 类别标注本身不可靠（实测 tips 占 53.9%，成都 66 个 chunk 里 food=0，餐饮内容被标成 tips），
+    # 硬按 category 过滤会把正确内容整池滤空。滤空后自动退回"只按城市"重试一次（约 20ms）。
+    # 注意判断必须放在元数据过滤**之后**：bm25/keyword 的原始返回不受 category 影响，
+    # 早先放在前面判过一次，导致回退永远不触发。
+    if category and not v and not b and not kw:
+        category = None
+        filters["category"] = None
+        has_filter = any(filters.values())
+        v, b, kw, meta = _recall(None)
     if kw and cfg.KEYWORD_MIN_COVERAGE > 0:
         kw = [x for x in kw if (x.get("coverage") or 0.0) >= cfg.KEYWORD_MIN_COVERAGE]
-
-    need_ids = [x["chunk_id"] for x in b] + [x["chunk_id"] for x in kw]
-    meta = R.load_meta(need_ids) if need_ids else {}
-    if has_filter:
-        want = {k: val for k, val in filters.items() if val}
-
-        def _keep(x):
-            md = (meta.get(x["chunk_id"], {}).get("metadata") or {})
-            return all(md.get(k) == val for k, val in want.items())
-
-        b = [x for x in b if _keep(x)]
-        kw = [x for x in kw if _keep(x)]
 
     _t0 = _t.perf_counter()
     # 开了重排就多留候选（默认 20 条），让重排有得选；否则维持原 3 倍
