@@ -1,0 +1,9 @@
+# RAG 模块（阶段 E/F）依赖
+# 安装：pip install -r requirements-rag.txt
+chromadb>=0.5,<2
+rank-bm25>=0.2.2
+jieba>=0.42.1
+zhconv>=2.0
+numpy>=1.26
+# 仅当 RAG_EMBED_PROVIDER=local 时需要（本地兜底模型）
+# sentence-transformers>=3.0

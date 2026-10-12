@@ -1,0 +1,154 @@
+旅游规划助手 · 第三方数据源署名与许可说明（NOTICE）
+==============================================================
+
+本文件由 scripts/gen_notice.py 依据 data/manifest.csv 自动生成，请勿手工编辑。
+生成时间：2026-10-11 18:26
+数据快照：data/raw/<source_id>/<yyyymmdd>/（只追加，不覆盖）
+登记清单：data/manifest.csv（含 source_url、license、retrieved_at、content_hash）
+
+本项目知识库在构建与分发时使用了下列第三方数据源。各来源的著作权与数据库权利
+归其原始提供方所有，本项目仅在各自许可条款允许的范围内使用，并按下列要求署名。
+
+--------------------------------------------------------------
+许可：Creative Commons Attribution-ShareAlike 4.0 International（CC BY-SA 4.0）
+许可全文：https://creativecommons.org/licenses/by-sa/4.0/
+义务：必须署名、注明是否修改，并以相同方式共享（ShareAlike）。
+来源（3 个）：
+  * 英文维基导游 dump（正文命名空间）
+      数据集标识：enwikivoyage
+      来源地址  ：https://dumps.wikimedia.org/enwikivoyage/latest/enwikivoyage-latest-pages-articles.xml.bz2
+      获取时间  ：2026-10-11T16:11:31+08:00
+      快照位置  ：data/raw/enwikivoyage/
+      内容校验  ：1 个文件，sha256 见 manifest.csv
+      备注      ：补量；中文版条目量不足，约 125 MiB
+  * wikipedia-zh
+      数据集标识：wikipedia-zh
+      来源站点  ：https://zh.wikipedia.org/（dump: https://dumps.wikimedia.org/zhwiki/）（共 1999 篇，逐篇 URL 见 manifest.csv）
+      获取时间  ：2026-10-11T18:25:06+08:00
+      快照位置  ：data/raw/wikipedia-zh/
+      内容校验  ：1999 个文件，sha256 见 manifest.csv
+  * 中文维基导游 dump（正文命名空间）
+      数据集标识：zhwikivoyage
+      来源地址  ：https://dumps.wikimedia.org/zhwikivoyage/latest/zhwikivoyage-latest-pages-articles.xml.bz2
+      获取时间  ：2026-10-11T15:54:03+08:00
+      快照位置  ：data/raw/zhwikivoyage/
+      内容校验  ：1 个文件，sha256 见 manifest.csv
+      备注      ：主语料；快照 2026-10-01，约 13.7 MiB
+
+--------------------------------------------------------------
+许可：Creative Commons Attribution 4.0 International（CC BY 4.0）
+许可全文：https://creativecommons.org/licenses/by/4.0/
+义务：必须署名并注明是否修改，无同源要求。
+来源（5 个）：
+  * ChinaTravel 查询集（含中文行程请求与可执行约束）
+      数据集标识：chinatravel-queries
+      来源地址  ：https://hf-mirror.com/datasets/LAMDA-NeSy/ChinaTravel/resolve/main/easy.csv
+      获取时间  ：2026-10-11T15:56:48+08:00
+      快照位置  ：data/raw/chinatravel-queries/
+      内容校验  ：4 个文件，sha256 见 manifest.csv
+      备注      ：plan_eval.jsonl 的种子；rag_eval.jsonl 仍需自建并标注 related source_id
+  * ChinaTravel-Sandbox 中文结构化表（景点/餐厅/酒店/铁路/航班/POI/地铁）
+      数据集标识：chinatravel-sandbox-zh
+      来源地址  ：https://hf-mirror.com/datasets/LAMDA-NeSy/ChinaTravel-Sandbox/resolve/main/data/zh/attractions.parquet
+      获取时间  ：2026-10-11T15:54:47+08:00
+      快照位置  ：data/raw/chinatravel-sandbox-zh/
+      内容校验  ：7 个文件，sha256 见 manifest.csv
+      备注      ：release 2026.08.2；沙箱基准数据，仅用于检索/过滤/评测，不作为营业时间与票价的事实依据
+  * GeoNames 省级代码表
+      数据集标识：geonames-admin
+      来源地址  ：https://download.geonames.org/export/dump/admin1CodesASCII.txt
+      获取时间  ：2026-10-11T15:54:41+08:00
+      快照位置  ：data/raw/geonames-admin/
+      内容校验  ：1 个文件，sha256 见 manifest.csv
+      备注      ：省级枚举与校验；约 148 KB
+  * GeoNames 全球城市（人口 > 15000）
+      数据集标识：geonames-cities
+      来源地址  ：https://download.geonames.org/export/dump/cities15000.zip
+      获取时间  ：2026-10-11T15:54:37+08:00
+      快照位置  ：data/raw/geonames-cities/
+      内容校验  ：1 个文件，sha256 见 manifest.csv
+      备注      ：跨城市线路的城市库；约 3.2 MB
+  * GeoNames 中国全量地名
+      数据集标识：geonames-cn
+      来源地址  ：https://download.geonames.org/export/dump/CN.zip
+      获取时间  ：2026-10-11T16:04:51+08:00
+      快照位置  ：data/raw/geonames-cn/
+      内容校验  ：1 个文件，sha256 见 manifest.csv
+      备注      ：城市主键、坐标、行政层级；约 31 MB
+
+--------------------------------------------------------------
+许可：Apache License 2.0（Apache License 2.0）
+许可全文：https://www.apache.org/licenses/LICENSE-2.0
+义务：保留版权与许可声明，附 NOTICE 文件。
+来源（2 个）：
+  * 魔搭 · CCKS2021 中文地址要素解析（达摩院）
+      数据集标识：ms-address-ner
+      来源地址  ：https://www.modelscope.cn/api/v1/datasets/iic/address-ner-ccks-2021/repo?Revision=master&FilePath=train.conll
+      获取时间  ：2026-10-11T15:57:03+08:00
+      快照位置  ：data/raw/ms-address-ner/
+      内容校验  ：2 个文件，sha256 见 manifest.csv
+      备注      ：BIO 标注：prov/city/district/town/community/poi/road/roadno/subpoi；阶段 C 地名对齐可直接训练或校验切分
+  * 魔搭 · 中文旅游出行场景单轮对话（意图+槽位）
+      数据集标识：ms-travel-dialogue
+      来源地址  ：https://www.modelscope.cn/api/v1/datasets/yangzailu/chinese-travel-scene-dialogue-dataset/repo?Revision=master&FilePath=train.txt
+      获取时间  ：2026-10-11T15:57:16+08:00
+      快照位置  ：data/raw/ms-travel-dialogue/
+      内容校验  ：4 个文件，sha256 见 manifest.csv
+      备注      ：格式：句子\t意图，如 Request+景点+地址；供 Agent 的 intent_eval 使用（非 RAG 语料）
+
+--------------------------------------------------------------
+许可：Open Database License 1.0（ODbL）
+许可全文：https://opendatacommons.org/licenses/odbl/1-0/
+义务：必须署名（ODbL §4.3）；对外分发衍生数据库时须同源（§4.4）。
+来源（1 个）：
+  * 魔搭 · 全国 POI 点位（Shapefile）
+      数据集标识：ms-poi-national
+      来源地址  ：https://www.modelscope.cn/api/v1/datasets/XXXCBHDQ/community15-data/repo?Revision=master&FilePath=poi_national.shp
+      获取时间  ：2026-10-11T15:57:07+08:00
+      快照位置  ：data/raw/ms-poi-national/
+      内容校验  ：6 个文件，sha256 见 manifest.csv
+      备注      ：GCS_WGS_1984；配合 GeoPandas 读取，可做 POI 过滤与地名对齐的验证集
+
+--------------------------------------------------------------
+许可：Creative Commons Attribution-NonCommercial 4.0（CC BY-NC 4.0）
+许可全文：https://creativecommons.org/licenses/by-nc/4.0/
+义务：非商业使用；本课程项目为非商业用途。
+来源（1 个）：
+  * 魔搭 · GeoGLUE 地理语义理解基准（说明与任务清单）
+      数据集标识：ms-geoglue-spec
+      来源地址  ：https://www.modelscope.cn/api/v1/datasets/iic/GeoGLUE/repo?Revision=master&FilePath=README.md
+      获取时间  ：2026-10-11T15:57:04+08:00
+      快照位置  ：data/raw/ms-geoglue-spec/
+      内容校验  ：4 个文件，sha256 见 manifest.csv
+      备注      ：六任务：GeoETA/GeoEAG/GeoTES-rerank/GeoTES-recall/GeoCPA/GeoWWC；仓库根目录不含评测数据 zip，需 MsDataset 加载
+
+--------------------------------------------------------------
+许可：MIT License（MIT License）
+许可全文：https://opensource.org/license/mit
+义务：保留版权与许可声明。
+来源（1 个）：
+  * 魔搭 · 智源旅游赛道 QA/SFT（含检索内容字段）
+      数据集标识：ms-touind-qa
+      来源地址  ：https://www.modelscope.cn/api/v1/datasets/oops123456/TouInd/repo?Revision=master&FilePath=qa_dataset_final3.jsonl
+      获取时间  ：2026-10-11T15:57:18+08:00
+      快照位置  ：data/raw/ms-touind-qa/
+      内容校验  ：1 个文件，sha256 见 manifest.csv
+      备注      ：样例为 query+content+答案 的 RAG 式样本，可用于 compose 的提示词与拒答评测
+
+--------------------------------------------------------------
+待确认事项
+
+1. ms-poi-national（XXXCBHDQ/community15-data）：仓库未标注许可，元数据自述来源为
+   「我国分省的 OSM」。在作者确认前，按 ODbL 1.0 处理并署名；确认后更新本文件。
+2. ms-geoglue-spec（iic/GeoGLUE）：实际许可为 CC BY-NC 4.0（平台搜索页误标 Apache 2.0），
+   仅用于非商业的课程设计与研究用途。
+3. DatatangBeijing/*（数据堂系列）虽在平台标 Apache License 2.0，README 明确写
+   「版权归数据堂所有，商用数据」，本项目未采用其任何数据。
+4. 本项目未使用携程、大众点评、同程、下厨房等平台的抓取结果。
+
+引用格式示例
+
+  Wikivoyage contributors, "中文维基导游"，CC BY-SA 4.0，快照 2026-10-01，
+  https://dumps.wikimedia.org/zhwikivoyage/
+  GeoNames, https://www.geonames.org/，CC BY 4.0，快照 2026-10-11
+  LAMDA-NeSy, ChinaTravel-Sandbox (release 2026.08.2)，CC BY 4.0

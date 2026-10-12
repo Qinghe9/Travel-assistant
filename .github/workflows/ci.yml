@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: 静态检查（ruff + 语法编译）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 安装 ruff
+        run: python -m pip install --upgrade pip ruff
+      - name: ruff（高信号规则：语法错误、未定义名、格式化错误）
+        run: ruff check --select E9,F63,F7,F82 --output-format=github .
+      - name: 全量语法编译
+        run: python -m compileall -q app scripts evals .github/scripts
+
+  smoke:
+    name: 离线冒烟（不联网、不需要密钥）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-rag.txt zhconv
+      - name: 数据源适配器 / 清洗 / 切分 / 融合 冒烟
+        run: python scripts/smoke_fetch_offline.py

@@ -1,0 +1,25 @@
+# ===== 密钥与本地环境 =====
+.env
+.env.*
+!.env.example
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# ===== 数据集与索引（体积大、可重建，不入库）=====
+# 原始快照 / 清洗产物 / 向量库 / 评测中间产物都留在本机；
+# 只保留许可登记表 data/manifest.csv 作为来源与许可凭据。
+data/*
+!data/manifest.csv
+
+# ===== 工具与临时产物 =====
+.dsh/
+.tmp_smoke/
+.tmp_ms/
+*.part
