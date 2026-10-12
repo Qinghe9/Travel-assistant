@@ -103,7 +103,8 @@ LLM_MAX_RETRY = int(_env("LLM_MAX_RETRY", "1"))
 LLM_RETRY_BACKOFF = float(_env("LLM_RETRY_BACKOFF", "0.4"))
 LLM_TEMPERATURE = float(_env("LLM_TEMPERATURE", "0.2"))
 # 实测生成耗时与输出长度几乎成正比（免费档约 50 字/秒）：200 tokens 约 1.3~1.8s
-LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "200"))
+# 实测输出 >150 字会掉进 3.5s 档；70 tokens ≈ 90 字，是"2 点事实 + 引用"的下限
+LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "70"))
 
 # ---------------- 生成与重排（默认全部走硅基流动免费模型） ----------------
 # 硅基流动：https://cloud.siliconflow.cn —— 免费档即可用 bge-m3 / bge-reranker-v2-m3 / Qwen2.5-7B
@@ -127,7 +128,7 @@ else:
 #   Qwen/Qwen2.5-14B-Instruct   3.4s 有 2 句引用不合法
 #   THUDM/GLM-4-9B-0414         4.8s 合规
 #   stepfun-ai/Step-3.5-Flash   4.0s 空输出；tencent/Hunyuan-A13B 19s；Qwen/Qwen3-8B 超时
-LLM_MODEL = _env("RAG_LLM_MODEL", "inclusionAI/Ling-mini-2.0")
+LLM_MODEL = _env("RAG_LLM_MODEL", "inclusionAI/Ling-flash-2.0")
 # 轻量辅助模型：查询改写（只输出一句问句，越短越快）
 LLM_HELPER_MODEL = _env("RAG_LLM_HELPER_MODEL", "inclusionAI/Ling-mini-2.0")
 LLM_HELPER_MAX_TOKENS = int(_env("RAG_LLM_HELPER_MAX_TOKENS", "32"))   # 改写只输出一句问句
@@ -137,7 +138,7 @@ RERANK_ENABLED = _env("RAG_RERANK_ENABLED", "1") not in ("0", "false", "False", 
 RERANK_BASE_URL = _env("RAG_RERANK_BASE_URL", SF_BASE_URL)
 RERANK_API_KEY = _env("RAG_RERANK_API_KEY", SF_API_KEY)
 RERANK_MODEL = _env("RAG_RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
-RERANK_CANDIDATES = int(_env("RAG_RERANK_CANDIDATES", "8"))   # 送进重排的候选数（越多越准也越慢）
+RERANK_CANDIDATES = int(_env("RAG_RERANK_CANDIDATES", "6"))   # 送进重排的候选数（越多越准也越慢）
 RERANK_TIMEOUT = float(_env("RAG_RERANK_TIMEOUT", "1.2"))   # 超过就退回融合序，不拖垮 2 秒预算
 RERANK_MIN_SCORE = float(_env("RAG_RERANK_MIN_SCORE", "0.0"))  # 低于此分视为无关（0=不启用）
 
@@ -161,9 +162,16 @@ FAITHFULNESS_CHECK = _env("RAG_FAITHFULNESS_CHECK", "1") not in ("0", "false", "
 # 而是退化为**抽取式作答**（直接引用证据原文句 + 引用编号），保证 2 秒预算内一定有据可查。
 # 2.5s：Ling-mini 自身 p50 1.58s / max 1.82s（10 次实测），卡到 1.5s 会把一半请求误判超时；
 # 真正要挡的是免费档偶发的 8~10 秒尖刺。
-ANSWER_TIMEOUT = float(_env("RAG_ANSWER_TIMEOUT", "2.5"))
+# 1.5s：关键约束是"超时 + 检索 ≤ 2 秒"（1.5 + 0.35 ≈ 1.85s），
+# 这样**即使生成超时**，抽取式兜底也能在预算内返回有据可查的答案。
+ANSWER_TIMEOUT = float(_env("RAG_ANSWER_TIMEOUT", "1.5"))
 # 多轮改写超时：超时就用原问句检索（大概率仍可召回）
-DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "1.5"))
+DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "1.0"))
+# 接地校验：句子实词在**被引证据**里的覆盖率低于该值即判为编造、整句剔除；
+# 另外句中的数字（票价/时刻/电话）必须逐字出现在证据里。
+# 0.35：词面覆盖对"合法复述"天然偏低（实测 0.33 的句子其实有据），
+# 所以覆盖率只做粗筛；真正的硬约束是"数字必须出现在证据里"。
+GROUNDING_MIN_COVERAGE = float(_env("RAG_GROUNDING_MIN_COVERAGE", "0.35"))
 
 
 CHUNKS_FILE = PROCESSED / "chunks.jsonl"
