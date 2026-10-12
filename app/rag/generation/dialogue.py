@@ -25,7 +25,7 @@ _CATEGORY_WORDS = [
     ("food", ("餐", "吃", "美食", "小吃", "菜", "火锅")),
     ("hotel", ("住宿", "酒店", "旅馆", "旅店", "宾馆", "民宿", "住哪")),
     ("transport", ("交通", "抵达", "到达", "怎么去", "怎么走", "机场", "火车站", "地铁", "公交")),
-    ("attraction", ("景点", "景区", "观光", "游览", "好玩", "必去", "博物馆", "公园")),
+    ("attraction", ("景点", "景区", "观光", "游览", "好玩", "怎么玩", "值得去", "必去", "去哪", "博物馆", "公园")),
     ("tips", ("购物", "安全", "注意", "贴士")),
 ]
 
@@ -186,6 +186,10 @@ def prepare_turn(query: str, session: DialogueSession, city: str = None, categor
     # 更早一轮的成都写进去，覆盖掉最近一轮的杭州，于是跨轮指代指错城市。
     found_city = detect_city(query)
     if found_city:
+        if found_city != slots.get("city"):
+            # 换了城市 = 换了话题，别把上一个城市的类别继承过来
+            # （实测："成都美食" → "杭州西湖怎么玩" 会继承 category=food，把西湖景点全过滤掉）
+            slots.pop("category", None)
         slots["city"] = found_city
     # 类别则取改写后的（"那美食呢" -> food 这种新话题线索只在改写句里）
     found_cat = detect_category(rewritten)
@@ -202,8 +206,10 @@ def answer_turn(query: str, session: DialogueSession, city: str = None, category
     t0 = time.perf_counter()
     rewritten, slots = prepare_turn(query, session, city=city, category=category)
     rewrite_ms = int((time.perf_counter() - t0) * 1000)
+    # 按总预算动态分配：改写（LLM 或规则式）花掉多少，就从生成预算里扣掉
+    budget = cfg.DIALOGUE_BUDGET_S - (time.perf_counter() - t0) - 0.05
     result = answer(rewritten, city=slots.get("city"), category=slots.get("category"),
-                    top_k=top_k, keep_unbound=keep_unbound)
+                    top_k=top_k, keep_unbound=keep_unbound, budget=budget)
     result["original_query"] = query
     result["rewritten_query"] = rewritten
     result["slots"] = slots

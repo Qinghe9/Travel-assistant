@@ -169,9 +169,12 @@ FAITHFULNESS_CHECK = _env("RAG_FAITHFULNESS_CHECK", "1") not in ("0", "false", "
 # 而是退化为**抽取式作答**（直接引用证据原文句 + 引用编号），保证 2 秒预算内一定有据可查。
 # 2.5s：Ling-mini 自身 p50 1.58s / max 1.82s（10 次实测），卡到 1.5s 会把一半请求误判超时；
 # 真正要挡的是免费档偶发的 8~10 秒尖刺。
-# 1.5s（**硬墙钟**，见 llm.chat_within）：检索 ~30ms + 生成 ≤1.5s ≈ 1.53s，
-# 追问再加改写的 0.4s ≈ 1.93s —— 无论 API 多慢都卡在 2 秒内；超时则走抽取式兜底。
-ANSWER_TIMEOUT = float(_env("RAG_ANSWER_TIMEOUT", "1.5"))
+# 生成预算上限 1.85s（**硬墙钟**，见 llm.chat_within）。
+# 单轮：检索 0.03 + 生成 ≤1.85 ≈ 1.88s；追问：改写 ≤0.4 + 检索 0.03 + 生成 ≤1.5 ≈ 1.93s
+# ——由 answer_turn 按 DIALOGUE_BUDGET_S 动态分配，无论 API 多慢都卡在 2 秒内。
+ANSWER_TIMEOUT = float(_env("RAG_ANSWER_TIMEOUT", "1.85"))
+# 端到端预算：追问轮把"改写已花掉的时间"从生成预算里扣掉，剩余全给生成
+DIALOGUE_BUDGET_S = float(_env("RAG_DIALOGUE_BUDGET_S", "2.0"))
 # 多轮改写超时：超时就用原问句检索（大概率仍可召回）
 # 0.6s：超过就用规则式改写（检索等价、零延迟），别让一次改写吃掉 2 秒预算的三分之一
 DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "0.4"))

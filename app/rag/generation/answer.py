@@ -139,8 +139,13 @@ def extractive_answer(evidence, max_chars: int = 110, max_points: int = 3) -> st
     return "\n".join(points) if points else NO_EVIDENCE_ANSWER
 
 
-def answer(query, city=None, category=None, top_k=3, keep_unbound=False):
-    """端到端：检索 -> 证据 -> 生成 -> 后置校验。返回结构化结果。"""
+def answer(query, city=None, category=None, top_k=3, keep_unbound=False, budget=None):
+    """端到端：检索 -> 证据 -> 生成 -> 后置校验。返回结构化结果。
+
+    budget：本轮的生成预算（秒）。多轮里由 answer_turn 传入"总预算减去改写耗时"，
+    单轮调用方不传则用配置上限。硬墙钟由 llm.chat_within 保证。
+    """
+    deadline = cfg.ANSWER_TIMEOUT if budget is None else max(0.3, min(float(budget), cfg.ANSWER_TIMEOUT))
     ev = build_evidence(query, city=city, category=category, top_k=top_k)
     out = {"query": query, "answer": "", "citations": ev["citations"],
            "no_evidence": ev["no_evidence"], "degraded": False,
@@ -156,7 +161,7 @@ def answer(query, city=None, category=None, top_k=3, keep_unbound=False):
 
     try:
         # retries=0 + 短超时：免费档偶发 8~10 秒尖刺，宁可立刻退化为抽取式作答
-        res = llm.chat_within(build_messages(ev), deadline=cfg.ANSWER_TIMEOUT,
+        res = llm.chat_within(build_messages(ev), deadline=deadline,
                               temperature=0.0, retries=0)
     except llm.LLMError as e:
         out["answer"] = extractive_answer(ev)
@@ -181,7 +186,7 @@ def answer(query, city=None, category=None, top_k=3, keep_unbound=False):
                 "role": "user",
                 "content": "上一版没有通过引用校验。请重新作答：每个事实句末尾必须原样标注证据里的 [编号]，"
                            "没有标注引用的句子会被系统丢弃。"}], temperature=0.0,
-                deadline=cfg.ANSWER_TIMEOUT, retries=0)
+                deadline=deadline, retries=0)
             kept2_text, dropped2, unbound2 = post_validate(res2["text"], ev["citations"])
             kept2 = [s for s in kept2_text.split("\n") if s.strip()]
             if kept2:

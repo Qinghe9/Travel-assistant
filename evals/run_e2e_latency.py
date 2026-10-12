@@ -81,6 +81,10 @@ print("   均值 %d ms | p50 %d ms | p95 %d ms | max %d ms" % (
 print("   其中：检索(含重排) 均值 %d ms | 生成 均值 %d ms" % (
     statistics.mean([x["retrieval_ms"] for x in rows]),
     statistics.mean([x["llm_ms"] or 0 for x in rows])))
+fb = [x for x in rows if not x.get("llm_ms")]
+if fb:
+    print("   ⚠ 生成超时兜底 %d/%d：这些回答是**原文引用**而非模型组织——"
+          "说明当时 API 慢于预算，PASS 不代表生成链路健康" % (len(fb), len(rows)))
 print()
 print("== 多轮 %d 轮 ==" % len(mt))
 for x in mt:
@@ -88,7 +92,8 @@ for x in mt:
         x["query"][:12], (x["rewritten"] or "")[:20], x["total_ms"], x["rewrite_ms"],
         x["retrieval_ms"], x["llm_ms"], x["slots"]))
 print()
-print("== 端到端合计 %d 次 ==" % len(all_lat))
+fb_all = [x for x in rows + mt if not x.get("llm_ms")]
+print("== 端到端合计 %d 次（其中生成兜底 %d 次）==" % (len(all_lat), len(fb_all)))
 print("   均值 %d ms | p50 %d ms | p95 %d ms | max %d ms" % (
     statistics.mean(all_lat), p50, p95, max(all_lat)))
 slow = sorted(rows + mt, key=lambda x: -x["total_ms"])[:5]
