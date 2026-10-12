@@ -161,9 +161,9 @@ def rewrite(query: str, session: DialogueSession, timeout: int = None) -> str:
         {"role": "user", "content": "历史对话：\n%s\n\n最新问题：%s\n\n改写后的独立问句：" % (history, query)},
     ]
     try:
-        res = llm.chat(messages, model=cfg.LLM_HELPER_MODEL, temperature=0.0,
-                       max_tokens=cfg.LLM_HELPER_MAX_TOKENS,
-                       timeout=timeout or cfg.DIALOGUE_REWRITE_TIMEOUT, retries=0)
+        res = llm.chat_within(messages, deadline=timeout or cfg.DIALOGUE_REWRITE_TIMEOUT,
+                              model=cfg.LLM_HELPER_MODEL, temperature=0.0,
+                              max_tokens=cfg.LLM_HELPER_MAX_TOKENS, retries=0)
     except llm.LLMError:
         return rule_rewrite(query, session) if mode == "auto" else query
     text = (res.get("text") or "").strip()

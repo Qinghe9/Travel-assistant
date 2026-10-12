@@ -169,12 +169,12 @@ FAITHFULNESS_CHECK = _env("RAG_FAITHFULNESS_CHECK", "1") not in ("0", "false", "
 # 而是退化为**抽取式作答**（直接引用证据原文句 + 引用编号），保证 2 秒预算内一定有据可查。
 # 2.5s：Ling-mini 自身 p50 1.58s / max 1.82s（10 次实测），卡到 1.5s 会把一半请求误判超时；
 # 真正要挡的是免费档偶发的 8~10 秒尖刺。
-# 1.5s：关键约束是"超时 + 检索 ≤ 2 秒"（1.5 + 0.35 ≈ 1.85s），
-# 这样**即使生成超时**，抽取式兜底也能在预算内返回有据可查的答案。
+# 1.5s（**硬墙钟**，见 llm.chat_within）：检索 ~30ms + 生成 ≤1.5s ≈ 1.53s，
+# 追问再加改写的 0.4s ≈ 1.93s —— 无论 API 多慢都卡在 2 秒内；超时则走抽取式兜底。
 ANSWER_TIMEOUT = float(_env("RAG_ANSWER_TIMEOUT", "1.5"))
 # 多轮改写超时：超时就用原问句检索（大概率仍可召回）
 # 0.6s：超过就用规则式改写（检索等价、零延迟），别让一次改写吃掉 2 秒预算的三分之一
-DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "0.6"))
+DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "0.4"))
 # 接地校验：句子实词在**被引证据**里的覆盖率低于该值即判为编造、整句剔除；
 # 另外句中的数字（票价/时刻/电话）必须逐字出现在证据里。
 # 0.35：词面覆盖对"合法复述"天然偏低（实测 0.33 的句子其实有据），

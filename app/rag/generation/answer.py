@@ -156,8 +156,8 @@ def answer(query, city=None, category=None, top_k=3, keep_unbound=False):
 
     try:
         # retries=0 + 短超时：免费档偶发 8~10 秒尖刺，宁可立刻退化为抽取式作答
-        res = llm.chat(build_messages(ev), temperature=0.0,
-                       timeout=cfg.ANSWER_TIMEOUT, retries=0)
+        res = llm.chat_within(build_messages(ev), deadline=cfg.ANSWER_TIMEOUT,
+                              temperature=0.0, retries=0)
     except llm.LLMError as e:
         out["answer"] = extractive_answer(ev)
         out["degraded"] = True
@@ -177,11 +177,11 @@ def answer(query, city=None, category=None, top_k=3, keep_unbound=False):
     # 重试护栏：首答本身就慢（>1.2s）时不再重试，否则 2 秒预算必然被击穿
     if not kept and (dropped or unbound) and ev["chunks"] and (res["latency_ms"] or 0) < 700:
         try:
-            res2 = llm.chat(build_messages(ev) + [{
+            res2 = llm.chat_within(build_messages(ev) + [{
                 "role": "user",
                 "content": "上一版没有通过引用校验。请重新作答：每个事实句末尾必须原样标注证据里的 [编号]，"
                            "没有标注引用的句子会被系统丢弃。"}], temperature=0.0,
-                timeout=cfg.ANSWER_TIMEOUT, retries=0)
+                deadline=cfg.ANSWER_TIMEOUT, retries=0)
             kept2_text, dropped2, unbound2 = post_validate(res2["text"], ev["citations"])
             kept2 = [s for s in kept2_text.split("\n") if s.strip()]
             if kept2:

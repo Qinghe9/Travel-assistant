@@ -13,12 +13,37 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import time
 import urllib.error
 import urllib.request
 
 from app.rag import config as cfg
+
+_POOL = None
+
+
+def _pool() -> concurrent.futures.ThreadPoolExecutor:
+    global _POOL
+    if _POOL is None:
+        _POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm")
+    return _POOL
+
+
+def chat_within(messages, deadline: float, **kwargs):
+    """硬墙钟版 chat：到点即抛 LLMError("deadline")，不等慢响应。
+
+    为什么需要：urllib 的 timeout 只是**每次读**的超时，服务端慢速分段返回时可以远超设定值
+    （实测 0.6 s 的改写预算被拖到 1.6 s，1.5 s 的生成预算被拖到 2.3 s）。
+    这里用线程 + future.result(timeout=) 把**墙钟**兜住；后台线程会自然结束，不再影响本次返回。
+    """
+    kwargs.setdefault("timeout", max(deadline, 0.1))
+    fut = _pool().submit(chat, messages, **kwargs)
+    try:
+        return fut.result(timeout=deadline)
+    except concurrent.futures.TimeoutError:
+        raise LLMError("deadline", "超过 %.2fs 墙钟预算" % deadline, retriable=False)
 
 
 class LLMError(RuntimeError):
