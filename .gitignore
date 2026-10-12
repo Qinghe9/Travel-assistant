@@ -12,11 +12,10 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
-# ===== 只收录 scripts/ 与 app/ 的代码 =====
+# ===== 只收录代码与评测集 =====
 # 数据集、索引、文档、PRD 与插图一律留在本机，不入库
 data/
 docs/
-evals/
 prd_assets/
 rag_assets/
 prd_render*/
@@ -25,6 +24,13 @@ build_prd.py
 build_rag_doc.py
 RAG模块开发流程_v1.1.md
 .vscode/
+
+# evals/ 只收评测脚本与评测集；rag_metrics.json 是每次跑评测都会重写的产物
+evals/*
+!evals/run_rag_eval.py
+!evals/rag_eval.jsonl
+!evals/boundary_eval.jsonl
+!evals/baseline.json
 
 # ===== 工具与临时产物 =====
 .dsh/

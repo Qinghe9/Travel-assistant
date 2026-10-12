@@ -27,7 +27,7 @@ jobs:
       - name: ruff（高信号规则：语法错误、未定义名、格式化错误）
         run: ruff check --select E9,F63,F7,F82 --output-format=github .
       - name: 全量语法编译
-        run: python -m compileall -q app scripts .github/scripts
+        run: python -m compileall -q app scripts evals .github/scripts
 
   smoke:
     name: 离线冒烟（不联网、不需要密钥）

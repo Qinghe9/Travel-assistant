@@ -5,7 +5,7 @@
 
 面向《人工智能创新开发实践》课程设计的旅游规划助手 RAG 部分：把维基导游、GeoNames、ChinaTravel 等公开数据建成**可追溯**的知识库，提供「采集 → 清洗 → 切分 → 混合检索 → 证据绑定 → 生成 → 引用校验」的端到端链路，并对 Recall@3、MRR、无关知识引入、证据绑定率、检索时延做自动评测。
 
-> 本仓库**只收录 `app/` 与 `scripts/` 的代码**，外加 CI 配置与说明文件。数据集、索引、评测集、PRD/流程文档与插图只保留在本机，不入库（见下方「数据与文档不入库」）。
+> 本仓库**只收录代码与评测集**（`app/`、`scripts/`、`evals/`），外加 CI 配置与说明文件。数据集、索引、PRD/流程文档与插图只保留在本机，不入库（见下方「数据与文档不入库」）。
 
 ## 目录结构
 
@@ -16,6 +16,7 @@ app/rag/
   retrieval/           混合检索：recall（向量 + BM25）、fuse（RRF）、evidence（证据口径）
   generation/          llm 客户端、answer（提示词 + 引用后置校验）
 scripts/               数据下载、清洗、切分、建索引、问答、自检等可执行入口
+evals/                 检索评测脚本 + 评测集（Recall@3 / MRR / nDCG / 时延门禁）
 .github/               CI 与代码自动审查工作流
 ```
 
@@ -43,7 +44,7 @@ python scripts/build_index.py --rebuild
 python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evidence
 ```
 
-检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）只在本机保留，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
+检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）都在仓库里，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
 
 ## 检索性能（进程内热索引）
 
@@ -62,7 +63,7 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
 
 ## 数据与文档不入库
 
-[.gitignore](.gitignore) 排除了 `data/`（原始快照、清洗产物、向量库与 manifest，约 1 GB）、`docs/`、`evals/`、`prd_assets/`、`rag_assets/`、`prd_render*/`、`*.docx` 等，本机按上面的命令重建。
+[.gitignore](.gitignore) 排除了 `data/`（原始快照、清洗产物、向量库与 manifest，约 1 GB）、`docs/`、`prd_assets/`、`rag_assets/`、`prd_render*/`、`*.docx` 等，本机按上面的命令重建。
 
 > 采集脚本已内置 HTTP 308 跳转处理：`hf-mirror.com` 会把 `/datasets/.../resolve/...` 用 308 跳到 `huggingface.co`，而 Python 3.10 及更早的标准库既不派发 `http_error_308`，`redirect_request()` 也不在白名单里，必须显式补上（见 `scripts/fetch_datasets.py` 的 `_RedirectHandler`）。脚本同时校验 `Content-Length`，避免把**截断**的快照当成成功登记。
 

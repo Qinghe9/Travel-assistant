@@ -1,0 +1,151 @@
+{
+  "generated_at": "2026-10-12T13:16:43+0800",
+  "k": 3,
+  "results": {
+    "open": {
+      "queries": 155,
+      "scored": 155,
+      "recall_at_k": 0.871,
+      "mrr": 0.7634,
+      "ndcg_at_k": 0.56,
+      "irrelevant_knowledge": 3,
+      "irrelevant_ratio": 0.0068,
+      "off_target_chunks": 224,
+      "evidence_binding_rate": 1.0,
+      "empty_evidence": 7,
+      "latency_ms_mean": 264,
+      "latency_ms_p95": 360,
+      "misses": [
+        [
+          "广州有什么特色美食",
+          [
+            [
+              "0001",
+              "广州",
+              0.03101
+            ],
+            [
+              "0062",
+              "广州",
+              0.02964
+            ],
+            [
+              "0007",
+              "延边朝鲜族自治州",
+              0.01639
+            ]
+          ]
+        ],
+        [
+          "尚志市有哪些县级行政区划单位？",
+          [
+            [
+              "0004",
+              "东莞",
+              0.02941
+            ],
+            [
+              "0004",
+              "杭州",
+              0.02765
+            ],
+            [
+              "0003",
+              "湖州",
+              0.01639
+            ]
+          ]
+        ],
+        [
+          "海口有什么特色美食",
+          [
+            [
+              "0005",
+              "海口",
+              0.03178
+            ],
+            [
+              "0002",
+              "海口",
+              0.02594
+            ],
+            [
+              "0001",
+              "海口",
+              0.02587
+            ]
+          ]
+        ],
+        [
+          "福州有什么特色美食",
+          [
+            [
+              "0011",
+              "福州",
+              0.03128
+            ],
+            [
+              "0007",
+              "福州",
+              0.02804
+            ],
+            [
+              "0005",
+              "长沙",
+              0.0264
+            ]
+          ]
+        ],
+        [
+          "青岛有什么值得去的地方",
+          []
+        ]
+      ]
+    },
+    "filter": {
+      "queries": 155,
+      "scored": 155,
+      "recall_at_k": 0.9742,
+      "mrr": 0.9667,
+      "ndcg_at_k": 0.8124,
+      "irrelevant_knowledge": 0,
+      "irrelevant_ratio": 0.0,
+      "off_target_chunks": 90,
+      "evidence_binding_rate": 1.0,
+      "empty_evidence": 4,
+      "latency_ms_mean": 339,
+      "latency_ms_p95": 409,
+      "misses": [
+        [
+          "城南大道连接了哪些城市干道？",
+          []
+        ],
+        [
+          "从南宁到海口怎么走",
+          []
+        ],
+        [
+          "从合肥到海口怎么走",
+          []
+        ],
+        [
+          "从南宁到海口怎么走",
+          []
+        ]
+      ]
+    }
+  },
+  "boundary": {
+    "knowledge_only": {
+      "total": 10,
+      "with_evidence": 10,
+      "evidence_rate": 1.0
+    },
+    "neither": {
+      "total": 10,
+      "refused": 10,
+      "refusal_rate": 1.0
+    },
+    "skipped_tool_scenarios": 20
+  }
+}
