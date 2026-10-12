@@ -10,6 +10,14 @@ from docx.enum.text import WD_BREAK
 from docx.enum.section import WD_ORIENT
 from docx.enum.table import WD_ROW_HEIGHT_RULE
 from PIL import Image, ImageDraw, ImageFont
+try:  # 早期 matplotlib 版插图函数（现已被下方 PIL 实现覆盖）所需；缺失时不影响文档主体
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+except ImportError:
+    plt = None
+    FancyBboxPatch = FancyArrowPatch = None
 from pathlib import Path
 import textwrap
 

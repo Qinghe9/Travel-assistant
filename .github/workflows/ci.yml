@@ -37,10 +37,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-          cache: pip
-      - name: 安装依赖
+      - name: 安装依赖（离线链路只用到轻依赖；chromadb / sentence-transformers 均为惰性导入）
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-rag.txt zhconv
+          pip install zhconv jieba rank-bm25 numpy
       - name: 数据源适配器 / 清洗 / 切分 / 融合 冒烟
         run: python scripts/smoke_fetch_offline.py
