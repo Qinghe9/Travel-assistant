@@ -26,13 +26,16 @@ def reset_stats() -> None:
         STATS[k] = 0 if k != "latency_ms" else 0.0
 
 
-def available() -> bool:
-    return bool(cfg.RERANK_ENABLED and cfg.RERANK_BASE_URL and cfg.RERANK_API_KEY)
+def available(enabled: bool = None) -> bool:
+    """enabled=None 时看全局开关；显式传 True 可单次强制启用（供 A/B 与特定场景）。"""
+    on = cfg.RERANK_ENABLED if enabled is None else enabled
+    return bool(on and cfg.RERANK_BASE_URL and cfg.RERANK_API_KEY)
 
 
-def rerank(query: str, items: list, top_n: int = None, timeout: int = None) -> list:
+def rerank(query: str, items: list, top_n: int = None, timeout: int = None,
+           enabled: bool = None) -> list:
     """就地写入 rerank_score，返回按重排分降序的新列表；失败时原样返回。"""
-    if not items or not available():
+    if not items or not available(enabled):
         return items
     cand = items[: cfg.RERANK_CANDIDATES]
     docs = [(it.get("text") or "")[:1200] for it in cand]

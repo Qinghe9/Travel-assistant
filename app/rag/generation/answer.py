@@ -119,6 +119,12 @@ def grounding_check(sentence: str, cited_texts: list, min_coverage: float,
     return True, ""
 
 
+# 抽取式兜底的选句线索：先躲开噪声，再优先带 POI 特征的句子
+_EXTRACT_NOISE = ("辖区", "接壤", "英语水平", "气候", "人口", "行政区划", "邮编", "区号", "平方公里", "下辖")
+_EXTRACT_POI = ("门票", "开放时间", "位于", "地址", "公园", "塔", "纪念馆", "博物馆", "寺", "古镇",
+                "步行街", "景区", "湖", "山", "桥", "故居", "会馆", "园林", "广场")
+
+
 def extractive_answer(evidence, max_chars: int = 110, max_points: int = 3) -> str:
     """抽取式兜底：按证据顺序取前几段原文首句 + 各自 source_id。
 
@@ -132,8 +138,19 @@ def extractive_answer(evidence, max_chars: int = 110, max_points: int = 3) -> st
         if not text or not sid or sid in seen:
             continue
         seen.add(sid)
-        head = re.split(r"(?<=[。！？!?；;])", text)[0].strip() or text
-        points.append("%s [%s]" % (head[:max_chars], sid))
+        sents = [s.strip() for s in re.split(r"(?<=[。！？!?；;])", text) if s.strip()]
+        pick = ""
+        for s in sents[:4]:
+            # 跳过行政区划/气候/人口这类噪声句；优先含 POI 特征的句子
+            if any(w in s for w in _EXTRACT_NOISE):
+                continue
+            if any(w in s for w in _EXTRACT_POI):
+                pick = s
+                break
+            if not pick and len(s) >= 12:
+                pick = s
+        pick = pick or (sents[0] if sents else text)
+        points.append("%s [%s]" % (pick[:max_chars], sid))
         if len(points) >= max_points:
             break
     return "\n".join(points) if points else NO_EVIDENCE_ANSWER

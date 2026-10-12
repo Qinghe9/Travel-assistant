@@ -238,7 +238,11 @@ def split_document(doc: dict, size: int = 450, overlap: int = 80):
             "province": doc.get("province"),
             "city": doc.get("city"),
             "county": doc.get("county"),
-            "category": lcat or c["category"],
+            # 只有"整块以 POI 卡片为主"（卡片在块首）时才用卡片类别覆盖小节类别。
+            # 原实现 lcat or c["category"] 会让"散文段里嵌了一张 {{see}} 卡片"的整块变成 attraction，
+            # 实测后果：标题路径为「广州 > 广州交通/其它」、正文讲英语水平的整段被标成 attraction，
+            # 按 category 过滤形同虚设，"推荐景点"类问题返回的全是概述段落。
+            "category": lcat if (lcat and c["text"].lstrip().startswith("\x01LIST:")) else c["category"],
             "source_type": doc.get("source_type", "public"),
             "source_url": doc.get("source_url"),
             "license": doc.get("license"),

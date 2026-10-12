@@ -152,6 +152,9 @@ TOP_K_KEYWORD = int(_env("RAG_TOP_K_KEYWORD", "10"))
 KEYWORD_TITLE_BOOST = float(_env("RAG_KEYWORD_TITLE_BOOST", "2.0"))
 # RRF 权重：等权会让"只在一路出现"的候选稀释共识，关键词路实测要降权
 KEYWORD_WEIGHT = float(_env("RAG_KEYWORD_WEIGHT", "1.0"))
+# 城市条目优先：查询指定城市时，给"来自该城市自身条目"（doc_title == city）的 chunk 加一点分。
+# 否则省级文档（广东）的概述/行政区划段落会挤掉城市条目（广州）的景点内容。
+CITY_DOC_BOOST = float(_env("RAG_CITY_DOC_BOOST", "0.012"))
 # 关键词覆盖率门槛：低于此比例的候选不进融合（挡掉只命中一个通用词的噪声）
 KEYWORD_MIN_COVERAGE = float(_env("RAG_KEYWORD_MIN_COVERAGE", "0.0"))
 

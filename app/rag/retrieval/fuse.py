@@ -143,11 +143,20 @@ def search_with_score(query: str, city: str = None, category: str = None, provin
         })
     items = [it for it in items if it["text"]]
 
+    # 城市条目优先：查询限定了城市时，来自该城市自身条目（doc_title == city）的 chunk 加权。
+    # 实测反例："广州有什么旅游景点" 的 Top3 全来自省级文档《广东》的行政区划/交通段落，
+    # 而《广州》条目里的景点内容被挤在后面。
+    if city and cfg.CITY_DOC_BOOST:
+        for it in items:
+            if (it.get("metadata") or {}).get("doc_title") == city:
+                it["score_fused"] = (it.get("score_fused") or 0.0) + cfg.CITY_DOC_BOOST
+        items.sort(key=lambda x: -(x.get("score_fused") or 0.0))
+
     # 重排：只用重排分决定"顺序"，阈值判定仍用重排前的余弦/RRF 分（语义不变）
     if use_rerank and len(items) > 1:
         from app.rag.retrieval import rerank as _rr
         _t1 = _t.perf_counter()
-        items = _rr.rerank(query, items)
+        items = _rr.rerank(query, items, enabled=use_rerank)
         R.TIMING["rerank_ms"] += (_t.perf_counter() - _t1) * 1000
 
     items = dedup_by_parent(items)

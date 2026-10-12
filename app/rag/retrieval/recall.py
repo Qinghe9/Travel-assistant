@@ -48,7 +48,9 @@ def warmup():
     """服务启动时调用：预热 jieba、BM25、向量器、热索引，并真跑一次检索把链路打通。
     不做这一步，首个真实请求要额外付 3-12 秒冷启动（实测）。"""
     import jieba
+    import jieba.analyse
     jieba.initialize()
+    jieba.analyse.extract_tags("预热")   # TF-IDF 词典首次加载 ~0.7s，别让它算在第一个问题上
     pack = bm25_pack()
     embedder()
     hot_index.build(pack, verbose=True)   # 装进内存；失败自动回退 Chroma
