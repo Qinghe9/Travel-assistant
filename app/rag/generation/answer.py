@@ -33,7 +33,8 @@ def build_messages(evidence, max_chunks=3):
         head = "%s（%s/%s，类别 %s）" % (md.get("doc_title") or md.get("title") or "",
                                         md.get("province") or "", md.get("city") or "",
                                         md.get("category") or "")
-        lines.append("[%s] %s\n%s" % (c["source_id"], head, c["text"]))
+        body = (c["text"] or "")[: cfg.EVIDENCE_MAX_CHARS]
+        lines.append("[%s] %s\n%s" % (c["source_id"], head, body))
     conds = []
     if evidence.get("city"):
         conds.append("城市=%s" % evidence["city"])

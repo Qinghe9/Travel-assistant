@@ -132,6 +132,9 @@ LLM_MODEL = _env("RAG_LLM_MODEL", "inclusionAI/Ling-flash-2.0")
 # 轻量辅助模型：查询改写（只输出一句问句，越短越快）
 LLM_HELPER_MODEL = _env("RAG_LLM_HELPER_MODEL", "inclusionAI/Ling-mini-2.0")
 LLM_HELPER_MAX_TOKENS = int(_env("RAG_LLM_HELPER_MAX_TOKENS", "32"))   # 改写只输出一句问句
+# 送进模型的每段证据截断长度：回答只要 2 点 × 25 字，600 字的整段证据纯属浪费输入 token，
+# 而输入越长生成越慢（实测 2050 字提示词 -> 生成 1.6~2.2s，截到 ~1100 字后可稳定在 1.5s 内）
+EVIDENCE_MAX_CHARS = int(_env("RAG_EVIDENCE_MAX_CHARS", "280"))
 
 # 重排序：bge-reranker-v2-m3 实测 ~255ms（3 篇），免费档可用
 # 默认关闭：实测在**带过滤的产品路径**上重排零增益（不重排的基线 Top3 命中率已是 1.000，
@@ -163,7 +166,11 @@ DIALOGUE_MAX_TURNS = int(_env("RAG_DIALOGUE_MAX_TURNS", "6"))
 # 追问改写模式：auto=先用 LLM（有预算）超时回落规则式 | llm=只用 LLM | rule=只用规则式(零延迟) | off=不改写
 # 实测规则式（把继承的城市拼进问句）与 LLM 改写的检索信号等价（余弦差 <0.005、Top3 大量重合），
 # 所以 DIALOGUE_REWRITE=rule 可以把追问的 ~0.5s 改写开销直接省掉。
-DIALOGUE_REWRITE = _env("RAG_DIALOGUE_REWRITE", "auto")
+# 默认 rule（规则式改写：把继承的城市拼进问句，零延迟）。
+# 实测（yolo 环境，8 单轮 + 5 轮追问）：auto 的兜底 6/13、P95 2022ms；
+# rule 的兜底 4/13、P95 1931ms，而检索结果等价（余弦差 <0.005、Top3 大量重合）。
+# 想要更"漂亮"的改写展示可以设 auto/llm，代价是每轮多花 0.3~0.5s 生成预算。
+DIALOGUE_REWRITE = _env("RAG_DIALOGUE_REWRITE", "rule")
 
 # 接地校验（逐句蕴含检查）：默认开，失败自动降级
 FAITHFULNESS_CHECK = _env("RAG_FAITHFULNESS_CHECK", "1") not in ("0", "false", "False", "")
@@ -180,7 +187,7 @@ ANSWER_TIMEOUT = float(_env("RAG_ANSWER_TIMEOUT", "1.85"))
 DIALOGUE_BUDGET_S = float(_env("RAG_DIALOGUE_BUDGET_S", "2.0"))
 # 多轮改写超时：超时就用原问句检索（大概率仍可召回）
 # 0.6s：超过就用规则式改写（检索等价、零延迟），别让一次改写吃掉 2 秒预算的三分之一
-DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "0.4"))
+DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "0.3"))
 # 接地校验：句子实词在**被引证据**里的覆盖率低于该值即判为编造、整句剔除；
 # 另外句中的数字（票价/时刻/电话）必须逐字出现在证据里。
 # 0.35：词面覆盖对"合法复述"天然偏低（实测 0.33 的句子其实有据），
