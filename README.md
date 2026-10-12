@@ -5,12 +5,7 @@
 
 面向《人工智能创新开发实践》课程设计的旅游规划助手 RAG 部分：把维基导游、GeoNames、ChinaTravel 等公开数据建成**可追溯**的知识库，提供「采集 → 清洗 → 切分 → 混合检索 → 证据绑定 → 生成 → 引用校验」的端到端链路，并对 Recall@3、MRR、无关知识引入、证据绑定率、检索时延做自动评测。
 
-| 文档 | 说明 |
-|---|---|
-| [RAG模块开发流程_v1.1.md](RAG模块开发流程_v1.1.md) | 阶段 A–H 的详细开发流程与指标口径 |
-| [docs/数据源调研_v1.md](docs/数据源调研_v1.md) | 各数据源可达性实测、许可与字段说明 |
-| [RAG模块开发流程_v1.1.docx](RAG模块开发流程_v1.1.docx) | 流程文档的可交付版本 |
-| [NOTICE](NOTICE) | 数据来源与许可声明 |
+> 本仓库**只收录 `app/` 与 `scripts/` 的代码**，外加 CI 配置与说明文件。数据集、索引、评测集、PRD/流程文档与插图只保留在本机，不入库（见下方「数据与文档不入库」）。
 
 ## 目录结构
 
@@ -21,9 +16,7 @@ app/rag/
   retrieval/           混合检索：recall（向量 + BM25）、fuse（RRF）、evidence（证据口径）
   generation/          llm 客户端、answer（提示词 + 引用后置校验）
 scripts/               数据下载、清洗、切分、建索引、问答、自检等可执行入口
-evals/                 rag_eval.jsonl 评测集与 run_rag_eval.py 指标脚本
-docs/                  数据源调研与报告
-data/                  数据集与索引（**不入库**，见下）
+.github/               CI 与代码自动审查工作流
 ```
 
 ## 快速开始
@@ -48,14 +41,13 @@ python scripts/build_index.py --rebuild
 
 # 6) 端到端问答
 python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evidence
-
-# 7) 检索评测（Recall@3 / MRR / nDCG@3 / 时延）
-python evals/run_rag_eval.py --mode both
 ```
 
-## 数据集不入库
+检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）只在本机保留，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
 
-`data/` 下的原始快照、清洗产物与向量库合计约 1 GB，全部由 [.gitignore](.gitignore) 排除，本机按上面的命令重建即可；仓库只保留 `data/manifest.csv` 这份**来源与许可登记表**（doc_id / source_url / license / content_hash / bytes）。
+## 数据与文档不入库
+
+[.gitignore](.gitignore) 排除了 `data/`（原始快照、清洗产物、向量库与 manifest，约 1 GB）、`docs/`、`evals/`、`prd_assets/`、`rag_assets/`、`prd_render*/`、`*.docx` 等，本机按上面的命令重建。
 
 > 采集脚本已内置 HTTP 308 跳转处理：`hf-mirror.com` 会把 `/datasets/.../resolve/...` 用 308 跳到 `huggingface.co`，而 Python 3.10 及更早的标准库既不派发 `http_error_308`，`redirect_request()` 也不在白名单里，必须显式补上（见 `scripts/fetch_datasets.py` 的 `_RedirectHandler`）。脚本同时校验 `Content-Length`，避免把**截断**的快照当成成功登记。
 
@@ -64,7 +56,7 @@ python evals/run_rag_eval.py --mode both
 | 工作流 | 触发 | 内容 |
 |---|---|---|
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | push / PR | ruff 高信号规则（E9/F63/F7/F82）+ 全量语法编译 + **离线冒烟**（不联网、不需要密钥） |
-| [.github/workflows/ai-review.yml](.github/workflows/ai-review.yml) | PR | ① ruff 把问题直接标注到 PR 改动行；② 调用 DeepSeek 生成评审意见并贴回 PR |
+| [.github/workflows/ai-review.yml](.github/workflows/ai-review.yml) | PR | ① ruff 把问题直接标注到 PR 改动行；② 调用 DeepSeek 生成评审意见并回帖 PR |
 
 启用 AI 审查只需在 **Settings → Secrets and variables → Actions** 添加：
 

@@ -26,7 +26,7 @@ jobs:
       - name: ruff（问题直接标注在 PR 改动行上；只提示不拦截，拦截交给 CI）
         run: ruff check --select E9,F63,F7,F82,F401,F841 --output-format=github --exit-zero .
       - name: 全量语法编译
-        run: python -m compileall -q app scripts evals .github/scripts
+        run: python -m compileall -q app scripts .github/scripts
 
   ai:
     name: AI 审查（DeepSeek）
