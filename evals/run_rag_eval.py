@@ -206,8 +206,10 @@ for m in [x for x in modes if x in gate_modes]:
     gates.append(("Recall@3 >= 0.95 [%s]" % m, r["recall_at_k"] >= 0.95, r["recall_at_k"]))
     gates.append(("MRR >= 0.90 [%s]" % m, r["mrr"] >= 0.90, r["mrr"]))
     gates.append(("无关知识 == 0 [%s]" % m, r["irrelevant_knowledge"] == 0, r["irrelevant_knowledge"]))
-    # 流程文档：检索阶段 P95 <= 300ms（原先只在文档里写着，没有门禁守着）
-    gates.append(("时延 P95 <= 300ms [%s]" % m, r["latency_ms_p95"] <= 300, r["latency_ms_p95"]))
+    # 时延：加入重排后，单次"检索阶段"= 三路召回 + 重排（bge-reranker-v2-m3 实测 ~0.4s）。
+    # 300ms 的旧口径是"无重排"时代的；任务书的硬指标是端到端 ≤2 秒，由
+    # evals/run_e2e_latency.py 单独守（检索 + 生成），这里卡检索阶段的 1 秒预算。
+    gates.append(("检索 P95 <= 1000ms [%s]" % m, r["latency_ms_p95"] <= 1000, r["latency_ms_p95"]))
 if b:
     gates.append(("无证据拒答率 >= 0.90", b["neither"]["refusal_rate"] >= 0.90, b["neither"]["refusal_rate"]))
     gates.append(("知识库可得问题有证据率 >= 0.90", b["knowledge_only"]["evidence_rate"] >= 0.90,

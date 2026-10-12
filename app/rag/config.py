@@ -96,14 +96,50 @@ BM25_K1 = float(_env("RAG_BM25_K1", "1.5"))
 BM25_B = float(_env("RAG_BM25_B", "0.75"))
 MAX_PER_PARENT = int(_env("RAG_MAX_PER_PARENT", "2"))
 
-# 对话模型（DeepSeek）
-LLM_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-LLM_API_KEY = _env("DEEPSEEK_API_KEY", "")
-LLM_MODEL = _env("LLM_MODEL", "deepseek-chat")
+# 对话模型（默认硅基流动免费模型，见下方 SF_*）
 LLM_TIMEOUT = int(_env("LLM_TIMEOUT", "15"))
 LLM_MAX_RETRY = int(_env("LLM_MAX_RETRY", "1"))
 LLM_TEMPERATURE = float(_env("LLM_TEMPERATURE", "0.2"))
 LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "1024"))
+
+# ---------------- 生成与重排（默认全部走硅基流动免费模型） ----------------
+# 硅基流动：https://cloud.siliconflow.cn —— 免费档即可用 bge-m3 / bge-reranker-v2-m3 / Qwen2.5-7B
+SF_BASE_URL = _env("RAG_SF_BASE_URL", _env("RAG_EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
+SF_API_KEY = _env("RAG_SF_API_KEY", _env("RAG_EMBED_API_KEY", ""))
+
+# 对话模型：默认硅基流动免费模型；要换回 DeepSeek 只需设 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
+LLM_BASE_URL = _env("LLM_BASE_URL", SF_BASE_URL)
+LLM_API_KEY = _env("LLM_API_KEY", _env("DEEPSEEK_API_KEY", SF_API_KEY))
+LLM_MODEL = _env("RAG_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+# 轻量辅助模型：查询改写、接地校验（比生成模型更短更稳）
+LLM_HELPER_MODEL = _env("RAG_LLM_HELPER_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+LLM_HELPER_MAX_TOKENS = int(_env("RAG_LLM_HELPER_MAX_TOKENS", "256"))
+
+# 重排序：bge-reranker-v2-m3 实测 ~255ms（3 篇），免费档可用
+RERANK_ENABLED = _env("RAG_RERANK_ENABLED", "1") not in ("0", "false", "False", "")
+RERANK_BASE_URL = _env("RAG_RERANK_BASE_URL", SF_BASE_URL)
+RERANK_API_KEY = _env("RAG_RERANK_API_KEY", SF_API_KEY)
+RERANK_MODEL = _env("RAG_RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANK_CANDIDATES = int(_env("RAG_RERANK_CANDIDATES", "20"))   # 送进重排的候选数
+RERANK_TIMEOUT = int(_env("RAG_RERANK_TIMEOUT", "8"))
+RERANK_MIN_SCORE = float(_env("RAG_RERANK_MIN_SCORE", "0.0"))  # 低于此分视为无关（0=不启用）
+
+# 第 3 路：关键词/标题精确匹配召回
+KEYWORD_ENABLED = _env("RAG_KEYWORD_ENABLED", "1") not in ("0", "false", "False", "")
+TOP_K_KEYWORD = int(_env("RAG_TOP_K_KEYWORD", "10"))
+KEYWORD_TITLE_BOOST = float(_env("RAG_KEYWORD_TITLE_BOOST", "2.0"))
+# RRF 权重：等权会让"只在一路出现"的候选稀释共识，关键词路实测要降权
+KEYWORD_WEIGHT = float(_env("RAG_KEYWORD_WEIGHT", "1.0"))
+# 关键词覆盖率门槛：低于此比例的候选不进融合（挡掉只命中一个通用词的噪声）
+KEYWORD_MIN_COVERAGE = float(_env("RAG_KEYWORD_MIN_COVERAGE", "0.0"))
+
+# 多轮对话
+DIALOGUE_MAX_TURNS = int(_env("RAG_DIALOGUE_MAX_TURNS", "6"))
+DIALOGUE_REWRITE = _env("RAG_DIALOGUE_REWRITE", "1") not in ("0", "false", "False", "")
+
+# 接地校验（逐句蕴含检查）：默认开，失败自动降级
+FAITHFULNESS_CHECK = _env("RAG_FAITHFULNESS_CHECK", "1") not in ("0", "false", "False", "")
+
 
 CHUNKS_FILE = PROCESSED / "chunks.jsonl"
 MANIFEST_FILE = INDEX / "IndexManifest.json"

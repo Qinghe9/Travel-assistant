@@ -16,7 +16,8 @@ from app.rag.retrieval import hot_index
 _EMB = None
 _BM25 = None
 # 四段耗时（embed_ms / vector_ms / bm25_ms / fuse_ms）+ 元数据读取
-TIMING = {"embed_ms": 0.0, "vector_ms": 0.0, "bm25_ms": 0.0, "fuse_ms": 0.0, "meta_ms": 0.0}
+TIMING = {"embed_ms": 0.0, "vector_ms": 0.0, "bm25_ms": 0.0, "keyword_ms": 0.0,
+          "fuse_ms": 0.0, "rerank_ms": 0.0, "meta_ms": 0.0}
 # 最近一次检索的向量最高相似度（避免调用方为拿这个值再检索一遍）
 LAST_SIM = 0.0
 
@@ -114,6 +115,34 @@ def bm25_search(query: str, top_k: int = None, city: str = None, category: str =
     TIMING["bm25_ms"] += (time.perf_counter() - t0) * 1000
     order = sorted(range(len(scores)), key=lambda i: -scores[i])[: top_k * 6]
     return [{"chunk_id": pack["ids"][i], "score_bm25": float(scores[i])} for i in order]
+
+
+def keywords_of(query: str, top_k: int = 8) -> list:
+    """抽取检索用关键词：TF-IDF 关键词 + 地名/专名（避免罕见景点名被 TF-IDF 排掉）。"""
+    import jieba.analyse
+    import jieba.posseg as pseg
+    tags = list(jieba.analyse.extract_tags(query, topK=top_k))
+    extra = []
+    for word, flag in pseg.cut(query):
+        if flag in ("ns", "nz", "nr", "nt", "n") and len(word) > 1 and word not in tags:
+            extra.append(word)
+    return (tags + extra)[: top_k + 4]
+
+
+def keyword_search(query: str, top_k: int = None, city: str = None, category: str = None,
+                   province: str = None, source_type: str = None):
+    """第 3 路：关键词/标题精确匹配召回。热索引不可用时返回空（不阻断）。"""
+    import time
+    top_k = top_k or cfg.TOP_K_KEYWORD
+    t0 = time.perf_counter()
+    if not hot_index.ready():
+        TIMING["keyword_ms"] += (time.perf_counter() - t0) * 1000
+        return []
+    terms = keywords_of(query)
+    out = hot_index.keyword_search(terms, top_k, {"city": city, "category": category,
+                                                  "province": province, "source_type": source_type})
+    TIMING["keyword_ms"] += (time.perf_counter() - t0) * 1000
+    return out
 
 
 def load_meta(chunk_ids):
