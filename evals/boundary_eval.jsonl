@@ -1,40 +1,20 @@
-{"uid": "bd-001", "query": "成都明天天气怎么样", "city": "成都", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "天气实时数据只能来自工具"}
-{"uid": "bd-002", "query": "北京到上海的高铁票价是多少", "city": "北京", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "票价只能来自供应商 API"}
-{"uid": "bd-003", "query": "上海迪士尼乐园今天的门票还有吗", "city": "上海", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "余票只能来自供应商 API"}
-{"uid": "bd-004", "query": "深圳今晚有哪些酒店还有空房", "city": "深圳", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "库存只能来自供应商 API"}
-{"uid": "bd-005", "query": "杭州到成都的航班几点起飞", "city": "杭州", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "航班时刻只能来自供应商 API"}
-{"uid": "bd-006", "query": "重庆解放碑附近现在打车要多久", "city": "重庆", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "实时路况只能来自路由服务"}
-{"uid": "bd-007", "query": "南京明天会下雨吗", "city": "南京", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "天气预报只能来自天气 API"}
-{"uid": "bd-008", "query": "广州南站到深圳北站现在还有票吗", "city": "广州", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "余票只能来自铁路供应商"}
-{"uid": "bd-009", "query": "苏州今天的空气质量指数是多少", "city": "苏州", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "实时监测只能来自外部服务"}
-{"uid": "bd-010", "query": "武汉天河机场现在航班正常吗", "city": "武汉", "scenario": "only_tool_available", "expected_action": "tool_only", "note": "航班状态只能来自供应商"}
-{"uid": "bd-011", "query": "武侯祠是什么地方", "city": "成都", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-012", "query": "西湖十景都有哪些", "city": "杭州", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-013", "query": "重庆为什么叫山城", "city": "重庆", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-014", "query": "广州有哪些特色小吃", "city": "广州", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-015", "query": "南京作为六朝古都的历史是怎样的", "city": "南京", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-016", "query": "苏州园林有什么特点", "city": "苏州", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-017", "query": "深圳有哪些值得一去的主题公园", "city": "深圳", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-018", "query": "北京故宫的开放区域有哪些", "city": "北京", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-019", "query": "武汉大学的樱花什么时候开", "city": "武汉", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-020", "query": "上海外滩的建筑风格是什么", "city": "上海", "scenario": "only_knowledge_available", "expected_action": "knowledge_only", "note": "知识库可答"}
-{"uid": "bd-021", "query": "量子纠缠退相干实验的低温恒温器型号", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "域外"}
-{"uid": "bd-022", "query": "如何用 Python 实现快速排序", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "域外"}
-{"uid": "bd-023", "query": "股票期权定价的 Black-Scholes 公式推导", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "域外"}
-{"uid": "bd-024", "query": "糖尿病的一线用药方案是什么", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "域外"}
-{"uid": "bd-025", "query": "C 语言指针的内存对齐规则", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "域外"}
-{"uid": "bd-026", "query": "2026 年诺贝尔物理学奖得主是谁", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "时效+域外"}
-{"uid": "bd-027", "query": "如何给 MySQL 建立复合索引", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "域外"}
-{"uid": "bd-028", "query": "请帮我写一首关于秋天的七言绝句", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "生成类，非检索"}
-{"uid": "bd-029", "query": "哈利波特第七部的结局是什么", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "域外"}
-{"uid": "bd-030", "query": "请证明费马小定理", "city": "", "scenario": "neither_available", "expected_action": "refuse", "note": "域外"}
-{"uid": "bd-031", "query": "成都明天天气怎么样", "city": "", "scenario": "天气 API 返回 429", "expected_action": "degrade_with_notice", "note": "工具失败/降级场景"}
-{"uid": "bd-032", "query": "北京到上海的高铁票价", "city": "", "scenario": "铁路供应商超时", "expected_action": "unavailable_with_retry", "note": "工具失败/降级场景"}
-{"uid": "bd-033", "query": "上海酒店还有空房吗", "city": "", "scenario": "酒店 API 返回 5xx", "expected_action": "unavailable_with_retry", "note": "工具失败/降级场景"}
-{"uid": "bd-034", "query": "杭州飞成都的航班", "city": "", "scenario": "航班 API 熔断打开", "expected_action": "unavailable_with_retry", "note": "工具失败/降级场景"}
-{"uid": "bd-035", "query": "深圳现在堵车吗", "city": "", "scenario": "路由服务超时", "expected_action": "degrade_to_estimate_or_unavailable", "note": "工具失败/降级场景"}
-{"uid": "bd-036", "query": "南京明天会下雨吗", "city": "", "scenario": "天气 API 无响应但有 30 分钟内缓存", "expected_action": "use_cache_with_timestamp", "note": "工具失败/降级场景"}
-{"uid": "bd-037", "query": "苏州今天的空气质量", "city": "", "scenario": "外部服务 4xx", "expected_action": "unavailable_with_retry", "note": "工具失败/降级场景"}
-{"uid": "bd-038", "query": "重庆到武汉的火车票", "city": "", "scenario": "铁路 API 返回空结果", "expected_action": "unavailable_with_retry", "note": "工具失败/降级场景"}
-{"uid": "bd-039", "query": "广州的酒店价格", "city": "", "scenario": "酒店 API 缓存已过期", "expected_action": "unavailable_no_stale_cache", "note": "工具失败/降级场景"}
-{"uid": "bd-040", "query": "武汉机场航班状态", "city": "", "scenario": "航班 API 返回坏 JSON", "expected_action": "unavailable_with_retry", "note": "工具失败/降级场景"}
+{"query": "广宁县有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["4b7ee2a2d26d"]}
+{"query": "元江哈尼族彝族傣族自治县有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["f032701d2f8d"]}
+{"query": "云溪区有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["dba05f6add14"]}
+{"query": "砚山县有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["5a331b82d8c1"]}
+{"query": "潮安县有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["e871b4139f64"]}
+{"query": "新北区有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["fbe4af86e17b"]}
+{"query": "西城区有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["817a3c4818f3"]}
+{"query": "新化县有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["dfefd3f452fa"]}
+{"query": "钟山县有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["1cf343c9cbde"]}
+{"query": "番禺区有什么值得看的", "kind": "knowledge_only", "relevant_source_ids": ["bef611a7617b"]}
+{"query": "量子纠缠退相干实验的低温恒温器型号有哪些", "kind": "neither"}
+{"query": "如何用 Python 实现一个快速排序算法", "kind": "neither"}
+{"query": "股票期权定价的 Black-Scholes 公式怎么推导", "kind": "neither"}
+{"query": "糖尿病的一线用药方案是什么", "kind": "neither"}
+{"query": "C 语言指针的内存对齐规则", "kind": "neither"}
+{"query": "用 Rust 写一个异步 WebSocket 服务器", "kind": "neither"}
+{"query": "国际空间站的轨道高度是多少", "kind": "neither"}
+{"query": "卷积神经网络的感受野怎么计算", "kind": "neither"}
+{"query": "如何用 SQL 优化百万行表的查询", "kind": "neither"}
+{"query": "古希腊哲学的三大代表人物是谁", "kind": "neither"}

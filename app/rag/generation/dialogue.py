@@ -28,6 +28,9 @@ _CATEGORY_WORDS = [
     ("attraction", ("景点", "景区", "观光", "游览", "好玩", "怎么玩", "值得去", "必去", "去哪", "博物馆", "公园")),
     ("tips", ("购物", "安全", "注意", "贴士")),
 ]
+_ENTITY_SUFFIXES = ("景区", "公园", "博物馆", "纪念馆", "故居", "古镇", "寺", "庙", "塔", "湖", "山",
+                    "广场", "步行街", "酒店", "宾馆", "饭店", "餐厅", "机场", "车站", "祠", "园")
+_GENERIC_ENTITY = {"景点", "景区", "美食", "酒店", "住宿", "交通", "开放时间", "门票", "价格", "地址"}
 
 REWRITE_SYSTEM = """你是旅行问答系统的「问句改写」模块。把用户最新问题改写成一句**不依赖上下文、可独立检索**的中文问题，
 并从历史里补齐被省略的城市、类别、景点名等限定（例如"那美食呢？"要补成"成都有什么特色美食？"）。
@@ -71,6 +74,23 @@ def detect_category(text: str):
     return None
 
 
+def detect_entity(text: str, city: str = None):
+    """识别用户显式提到的 POI/酒店/车站实体；宁缺毋滥，避免把泛化问题当实体。"""
+    q = (text or "").strip()
+    if city:
+        q = q.replace(city, "")
+    quoted = re.search(r"[“\"《]([^”\"》]{2,24})[”\"》]", q)
+    if quoted and quoted.group(1) not in _GENERIC_ENTITY:
+        return quoted.group(1)
+    for suffix in _ENTITY_SUFFIXES:
+        m = re.search(r"([\u4e00-\u9fffA-Za-z0-9·]{1,20}%s)" % re.escape(suffix), q)
+        if m and m.group(1) not in _GENERIC_ENTITY:
+            candidate = re.sub(r"^(请问|介绍一下|推荐|去|到)", "", m.group(1))
+            if candidate and candidate not in _GENERIC_ENTITY:
+                return candidate
+    return None
+
+
 class DialogueSession:
     """一次会话的历史与槽位。无状态服务里可放在 session 存储中；CLI 里直接持有实例。"""
 
@@ -95,15 +115,19 @@ class DialogueSession:
         return "\n".join(lines)
 
     def remember(self, query, rewritten, result, slots) -> None:
+        slots = dict(slots or {})
+        explicit = detect_entity(query, slots.get("city"))
+        if explicit:
+            slots["entity"] = explicit
         self.turns.append({
             "query": query,
             "rewritten": rewritten,
             "answer": result.get("answer", ""),
             "citations": result.get("citations", []),
-            "slots": dict(slots or {}),
+            "slots": slots,
         })
         self.turns = self.turns[-self.max_turns:]
-        self.slots = dict(slots or {})
+        self.slots = slots
 
 
 # 省略/指代标记：出现这些词才值得花一次模型调用去补全
@@ -119,10 +143,21 @@ def rule_rewrite(query: str, session: DialogueSession) -> str:
     """
     slots = (session.slots if session else {}) or {}
     city = slots.get("city") or ""
+    entity = slots.get("entity") or ""
     q = (query or "").strip()
+    prefix = []
     if city and city not in q:
-        return "%s %s" % (city, q)
-    return q
+        prefix.append(city)
+    if entity and entity not in q and needs_entity_context(q):
+        prefix.append(entity)
+    return (" ".join(prefix + [q])).strip()
+
+
+def needs_entity_context(query: str) -> bool:
+    """开放时间/门票/地址/它怎么样等追问必须绑定最近一次明确实体。"""
+    q = query or ""
+    return any(w in q for w in ("开放时间", "几点", "门票", "价格", "多少钱", "地址", "在哪",
+                                "怎么去", "它", "这个", "那里", "怎么样", "值得吗"))
 
 
 def needs_rewrite(query: str, session: DialogueSession) -> bool:
@@ -190,11 +225,15 @@ def prepare_turn(query: str, session: DialogueSession, city: str = None, categor
             # 换了城市 = 换了话题，别把上一个城市的类别继承过来
             # （实测："成都美食" → "杭州西湖怎么玩" 会继承 category=food，把西湖景点全过滤掉）
             slots.pop("category", None)
+            slots.pop("entity", None)
         slots["city"] = found_city
     # 类别则取改写后的（"那美食呢" -> food 这种新话题线索只在改写句里）
     found_cat = detect_category(rewritten)
     if found_cat:
         slots["category"] = found_cat
+    found_entity = detect_entity(query, slots.get("city"))
+    if found_entity:
+        slots["entity"] = found_entity
     return rewritten, {k: v for k, v in slots.items() if v}
 
 
@@ -206,10 +245,8 @@ def answer_turn(query: str, session: DialogueSession, city: str = None, category
     t0 = time.perf_counter()
     rewritten, slots = prepare_turn(query, session, city=city, category=category)
     rewrite_ms = int((time.perf_counter() - t0) * 1000)
-    # 按总预算动态分配：改写（LLM 或规则式）花掉多少，就从生成预算里扣掉
-    budget = cfg.DIALOGUE_BUDGET_S - (time.perf_counter() - t0) - 0.05
     result = answer(rewritten, city=slots.get("city"), category=slots.get("category"),
-                    top_k=top_k, keep_unbound=keep_unbound, budget=budget)
+                    top_k=top_k, keep_unbound=keep_unbound)
     result["original_query"] = query
     result["rewritten_query"] = rewritten
     result["slots"] = slots

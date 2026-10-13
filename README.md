@@ -55,7 +55,7 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
 | 第 3 路 关键词/标题 | 标题倒排加权 + 关键词覆盖率，专治专名/景点名 | ~10 ms |
 | 融合 | RRF（按名次，避免分数量纲不可比），三路等权 | <1 ms |
 | 重排 | **默认关闭**（原因见下）；开启时用硅基流动 `BAAI/bge-reranker-v2-m3`，失败自动退回融合序 | ~0.3 s |
-| 生成 | 硅基流动免费档 `inclusionAI/Ling-flash-2.0`（实测 p50 1.57 s、引用零违约） | ~1.2 s |
+| 生成 | DeepSeek `deepseek-chat`，SSE 真流式并记录 TTFT | 完整时延单独观测 |
 | 多轮 | 查询改写（0.6 s 预算，超时回落规则式）+ 槽位继承（城市/类别跨轮不丢） | ≤0.6 s/追问 |
 
 - **重排为什么默认关闭**：实测在**带过滤的产品路径**上它零增益——不重排的基线 Top3 命中率已是 1.000，
@@ -64,10 +64,9 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
   需要时设 `RAG_RERANK_ENABLED=1`。
 - **类别过滤不可靠**：chunk 的 `category` 里 tips 占 53.9%（成都 66 个 chunk 里 food=0），硬过滤会把池子清空，
   因此在 [fuse.py](app/rag/retrieval/fuse.py) 里做了「滤空就退回只按城市」的自动降级。
-- **端到端时延**（关重排）：`python evals/run_e2e_latency.py` → 单轮 p50 ≈1.44 s、P95 ≈1.65 s；
-  检索侧只占 ~24 ms，其余是免费档 LLM 的延迟（含偶发尖刺）。
-  生成超时会退化为**抽取式作答**（原文句 + 引用编号），配合 `RAG_ANSWER_TIMEOUT=1.5s`
-  保证"超时 + 检索 ≤ 2 秒"。
+- **端到端时延**：`python evals/run_e2e_latency.py` 以首个内容 token 的 P95 ≤2 秒为门禁；
+  完整响应时间只观测，不再为了 2 秒强行截断。生成失败时使用 query-aware 相关句兜底，
+  兜底率单独设门禁（默认 ≤5%），不会再混入正常生成冒充达标。
 
 ## 检索性能（进程内热索引）
 

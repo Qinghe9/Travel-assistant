@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""端到端问答：检索 -> 证据 -> 生成（默认硅基流动免费模型）-> 引用后置校验。
+"""端到端问答：检索 -> 证据 -> DeepSeek 流式生成 -> 引用后置校验。
 
 用法：
     python scripts/ask.py "成都有哪些必去的景点" --city 成都 --category attraction

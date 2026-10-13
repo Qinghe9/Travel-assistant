@@ -47,12 +47,14 @@ def build_evidence(query: str, city: str = None, category: str = None, top_k: in
     has_filter = bool(city or category)
     weak = bool(chunks) and (
         (not has_filter and cfg.MIN_FUSED_SCORE and max_score < cfg.MIN_FUSED_SCORE)
-        or (cfg.MIN_VECTOR_SIM and sim < cfg.MIN_VECTOR_SIM))
+        or (not has_filter and cfg.MIN_VECTOR_SIM and sim < cfg.MIN_VECTOR_SIM))
     index_version = ""
     if cfg.MANIFEST_FILE.exists():
         index_version = json.loads(cfg.MANIFEST_FILE.read_text(encoding="utf-8")).get("index_version", "")
     return {
         "query": query,
+        "city": city,
+        "category": category,
         "chunks": chunks,
         "citations": citations,
         "tool_refs": [],

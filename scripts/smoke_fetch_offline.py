@@ -94,6 +94,23 @@ items = [{"chunk_id": "1", "metadata": {"parent_doc_id": "p"}},
          {"chunk_id": "3", "metadata": {"parent_doc_id": "p"}}]
 check("同源每篇最多保留 2 条", len(dedup_by_parent(items)) == 2)
 
+from app.rag.generation.answer import compress_evidence, extractive_answer  # noqa: E402
+long_text = "成都概况与人口信息。" * 40 + "武侯祠开放时间为08:00到18:00，门票50元。" + "行政区划信息。" * 30
+compressed = compress_evidence("武侯祠开放时间和门票", long_text, 160)
+check("query-aware 证据压缩保留相关尾句", "08:00" in compressed and "50元" in compressed, compressed[:80])
+ev = {"query": "武侯祠开放时间", "chunks": [
+    {"source_id": "aaaaaaaaaaaa", "text": "成都人口众多。武侯祠开放时间为08:00到18:00。"},
+    {"source_id": "bbbbbbbbbbbb", "text": "成都下辖多个行政区。"}]}
+fallback = extractive_answer(ev, max_points=1)
+check("抽取兜底按问题相关性排序", "开放时间" in fallback and "aaaaaaaaaaaa" in fallback, fallback)
+
+from app.rag.generation.dialogue import DialogueSession, prepare_turn  # noqa: E402
+session = DialogueSession()
+session.slots = {"city": "成都", "entity": "武侯祠", "category": "attraction"}
+session.turns = [{"query": "成都武侯祠怎么样？", "answer": "", "slots": dict(session.slots)}]
+rewritten, slots = prepare_turn("它的开放时间是什么？", session)
+check("多轮追问继承实体", "武侯祠" in rewritten and slots.get("entity") == "武侯祠", rewritten)
+
 print("-" * 60)
-print("通过 %d 项，失败 %d 项" % (12 - len(FAIL), len(FAIL)))
+print("通过 %d 项，失败 %d 项" % (15 - len(FAIL), len(FAIL)))
 sys.exit(1 if FAIL else 0)

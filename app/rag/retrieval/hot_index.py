@@ -249,7 +249,7 @@ def bm25_search(terms, top_k: int):
     return [{"chunk_id": h["ids"][int(r)], "score_bm25": float(scores[r])} for r in picked]
 
 
-def keyword_search(terms, top_k: int, filters=None, title_boost: float = None):
+def keyword_search(terms, top_k: int, filters=None, title_boost: float = None, phrases=None):
     """第 3 路：关键词/标题精确匹配。
 
     覆盖率为底、标题命中加权：score = (命中词数 + boost × 标题命中词数) / 查询词数。
@@ -290,13 +290,25 @@ def keyword_search(terms, top_k: int, filters=None, title_boost: float = None):
         hit = np.where(keep, hit, 0.0)
         title_hit = np.where(keep, title_hit, 0.0)
     score = (hit + boost * title_hit) / float(len(uniq))
+    exact = np.zeros(h["n"], dtype=bool)
+    clean_phrases = [p.strip() for p in (phrases or []) if len(p.strip()) >= 2]
+    if clean_phrases:
+        scan_rows = rows if rows is not None else h["_range"]
+        for r in scan_rows:
+            ri = int(r)
+            haystack = "%s %s %s" % (h["text"][ri], h["meta"][ri].get("doc_title", ""),
+                                      h["meta"][ri].get("title_path", ""))
+            if any(p in haystack for p in clean_phrases):
+                exact[ri] = True
+                score[ri] += 4.0
     nz = np.flatnonzero(score)
     if len(nz) == 0:
         return []
     k = min(int(top_k), len(nz))
     picked = nz[np.argsort(-score[nz], kind="stable")[:k]]
     return [{"chunk_id": h["ids"][int(r)], "score_keyword": float(score[r]),
-             "coverage": float(hit[r] / len(uniq)), "title_hits": int(title_hit[r])} for r in picked]
+             "coverage": float(hit[r] / len(uniq)), "title_hits": int(title_hit[r]),
+             "exact_phrase": bool(exact[r])} for r in picked]
 
 
 def lookup(chunk_ids):

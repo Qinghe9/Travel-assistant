@@ -76,7 +76,7 @@ def vector_search(query: str, top_k: int = None, city: str = None, category: str
     import time
     top_k = top_k or cfg.TOP_K_VECTOR
     t0 = time.perf_counter()
-    vec = embedder().embed_texts([query])[0]
+    vec = embedder().embed_query(query)
     TIMING["embed_ms"] += (time.perf_counter() - t0) * 1000
     if hot_index.ready():          # 内存暴力余弦：实测 126ms -> ~5ms
         t1 = time.perf_counter()
@@ -131,6 +131,25 @@ def keywords_of(query: str, top_k: int = 8) -> list:
     return (tags + extra)[: top_k + 4]
 
 
+def exact_phrases_of(query: str) -> list:
+    """抽取用户明确给出的长专名，供正文子串精确召回。"""
+    import re
+    q = (query or "").strip()
+    patterns = [
+        # 优先取“城市的实体在哪里”中间部分，不能让 ^ 分支贪婪吞掉城市。
+        r"的\s*([\u4e00-\u9fffA-Za-z0-9·]{2,30}?)\s*(?:在哪里|在哪|怎么去|地址)",
+        r"[“\"《]([^”\"》]{2,30})[”\"》]",
+    ]
+    generic = {"景点", "美食", "酒店", "住宿", "交通", "开放时间", "门票", "价格"}
+    out = []
+    for pat in patterns:
+        for value in re.findall(pat, q):
+            value = value.strip()
+            if value not in generic and value not in out:
+                out.append(value)
+    return out[:3]
+
+
 def keyword_search(query: str, top_k: int = None, city: str = None, category: str = None,
                    province: str = None, source_type: str = None):
     """第 3 路：关键词/标题精确匹配召回。热索引不可用时返回空（不阻断）。"""
@@ -142,7 +161,8 @@ def keyword_search(query: str, top_k: int = None, city: str = None, category: st
         return []
     terms = keywords_of(query)
     out = hot_index.keyword_search(terms, top_k, {"city": city, "category": category,
-                                                  "province": province, "source_type": source_type})
+                                                  "province": province, "source_type": source_type},
+                                   phrases=exact_phrases_of(query))
     TIMING["keyword_ms"] += (time.perf_counter() - t0) * 1000
     return out
 

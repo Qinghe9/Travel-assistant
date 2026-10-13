@@ -71,9 +71,9 @@ def search_with_score(query: str, city: str = None, category: str = None, provin
     filters = {"city": city, "category": category, "province": province, "source_type": source_type}
     has_filter = any(filters.values())
     use_rerank = cfg.RERANK_ENABLED if rerank is None else rerank
+    query_phrases = R.exact_phrases_of(query)
 
     def _recall(cat):
-        vv = R.vector_search(query, city=city, category=cat, province=province, source_type=source_type)
         bb = R.bm25_search(query, city=city, category=cat, province=province, source_type=source_type)
         kk = (R.keyword_search(query, city=city, category=cat, province=province,
                                source_type=source_type) if cfg.KEYWORD_ENABLED else [])
@@ -83,9 +83,13 @@ def search_with_score(query: str, city: str = None, category: str = None, provin
             w = {k: val for k, val in filters.items() if val}
             bb = [x for x in bb if _meta_match(mm, x, w)]
             kk = [x for x in kk if _meta_match(mm, x, w)]
-        return vv, bb, kk, mm
+        lexical_exact = bool(query_phrases and any(x.get("exact_phrase") for x in kk))
+        # 明确专名已被正文/标题完整命中时，词法证据比语义近似更可靠，并可省掉一次远程 embedding。
+        vv = ([] if lexical_exact else
+              R.vector_search(query, city=city, category=cat, province=province, source_type=source_type))
+        return vv, bb, kk, mm, lexical_exact
 
-    v, b, kw, meta = _recall(category)
+    v, b, kw, meta, lexical_exact = _recall(category)
     # 类别标注本身不可靠（实测 tips 占 53.9%，成都 66 个 chunk 里 food=0，餐饮内容被标成 tips），
     # 硬按 category 过滤会把正确内容整池滤空。滤空后自动退回"只按城市"重试一次（约 20ms）。
     # 注意判断必须放在元数据过滤**之后**：bm25/keyword 的原始返回不受 category 影响，
@@ -94,7 +98,7 @@ def search_with_score(query: str, city: str = None, category: str = None, provin
         category = None
         filters["category"] = None
         has_filter = any(filters.values())
-        v, b, kw, meta = _recall(None)
+        v, b, kw, meta, lexical_exact = _recall(None)
     if kw and cfg.KEYWORD_MIN_COVERAGE > 0:
         kw = [x for x in kw if (x.get("coverage") or 0.0) >= cfg.KEYWORD_MIN_COVERAGE]
 
@@ -112,8 +116,9 @@ def search_with_score(query: str, city: str = None, category: str = None, provin
     R.TIMING["fuse_ms"] += (_t.perf_counter() - _t0) * 1000
     thr = cfg.MIN_FUSED_SCORE if min_score is None else min_score
 
-    # 判据一（始终生效）：向量余弦相似度。绝对值有语义，域内 0.53+ / 域外 <0.49
-    if fused and cfg.MIN_VECTOR_SIM and top_sim < cfg.MIN_VECTOR_SIM:
+    # 无过滤时用余弦阈值挡域外问题。已有城市/类别过滤时，过滤本身就是强意图；
+    # 继续套全库阈值会误杀专名、地址、开放时间等短查询。
+    if not lexical_exact and not has_filter and fused and cfg.MIN_VECTOR_SIM and top_sim < cfg.MIN_VECTOR_SIM:
         return [], top_score
     # 判据二（仅无过滤时）：RRF 融合分，挡掉「单路孤证」
     if not has_filter and fused and thr and top_score < thr:
@@ -138,10 +143,18 @@ def search_with_score(query: str, city: str = None, category: str = None, provin
             "score_vector": vmap.get(cid, {}).get("score_vector"),
             "score_bm25": bmap.get(cid, {}).get("score_bm25"),
             "score_keyword": kmap.get(cid, {}).get("score_keyword"),
+            "exact_phrase": bool(kmap.get(cid, {}).get("exact_phrase")),
             "score_fused": sc,
             "metadata": md,
         })
     items = [it for it in items if it["text"]]
+
+    # 完整实体短语命中是比通用词多路共识更强的信号，确定性推到 Top3。
+    if cfg.EXACT_PHRASE_BOOST:
+        for it in items:
+            if it.get("exact_phrase"):
+                it["score_fused"] = (it.get("score_fused") or 0.0) + cfg.EXACT_PHRASE_BOOST
+        items.sort(key=lambda x: -(x.get("score_fused") or 0.0))
 
     # 城市条目优先：查询限定了城市时，来自该城市自身条目（doc_title == city）的 chunk 加权。
     # 实测反例："广州有什么旅游景点" 的 Top3 全来自省级文档《广东》的行政区划/交通段落，

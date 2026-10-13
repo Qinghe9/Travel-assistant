@@ -47,7 +47,9 @@ try:
 except Exception as _exc:  # noqa: BLE001
     print("预热失败（继续用回退路径）：%s" % _exc)
 
-items = [json.loads(l) for l in (EVALS / "rag_eval.jsonl").open(encoding="utf-8")]
+eval_bytes = (EVALS / "rag_eval.jsonl").read_bytes()
+eval_fingerprint = hashlib.sha256(eval_bytes).hexdigest()[:16]
+items = [json.loads(l) for l in eval_bytes.decode("utf-8").splitlines() if l.strip()]
 if a.limit:
     items = items[: a.limit]
 
@@ -140,7 +142,8 @@ def run_mode(mode):
 
 # 边界集里只有这两类考的是检索：知识库可得（必须有证据）/ 两者皆无（必须拒答）。
 # 其余是工具故障注入场景（天气 429、铁路超时…），考的是工具层，本评测跳过。
-BOUNDARY_RETRIEVAL = {"only_knowledge_available": "knowledge_only", "neither_available": "neither"}
+BOUNDARY_RETRIEVAL = {"only_knowledge_available": "knowledge_only", "knowledge_only": "knowledge_only",
+                      "neither_available": "neither", "neither": "neither"}
 
 
 def run_boundary():
@@ -167,7 +170,8 @@ def run_boundary():
 
 
 modes = ["open", "filter"] if a.mode == "both" else [a.mode]
-report = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "k": K, "results": {}}
+report = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "k": K,
+          "eval_fingerprint": eval_fingerprint, "eval_queries": len(items), "results": {}}
 for m in modes:
     r = run_mode(m)
     report["results"][m] = r
@@ -218,14 +222,18 @@ if b:
 base_path = EVALS / "baseline.json"
 if base_path.exists():
     base = json.loads(base_path.read_text(encoding="utf-8"))
-    for m in modes:
-        if m in base.get("results", {}):
-            for key, label in (("recall_at_k", "Recall@3"), ("mrr", "MRR")):
-                old = base["results"][m][key]
-                new = report["results"][m][key]
-                drop = (new - old) * 100
-                if drop < -2:
-                    gates.append(("相对基线退化 %.1f 个百分点 %s [%s]" % (drop, label, m), False, new))
+    if base.get("eval_fingerprint") == eval_fingerprint:
+        for m in modes:
+            if m in base.get("results", {}):
+                for key, label in (("recall_at_k", "Recall@3"), ("mrr", "MRR")):
+                    old = base["results"][m][key]
+                    new = report["results"][m][key]
+                    drop = (new - old) * 100
+                    if drop < -2:
+                        gates.append(("相对基线退化 %.1f 个百分点 %s [%s]" % (drop, label, m), False, new))
+    else:
+        print("跳过相对基线比较：评测集指纹不同（当前 %s，基线 %s）" % (
+            eval_fingerprint, base.get("eval_fingerprint", "旧基线无指纹")))
 
 print("-" * 56)
 for name, ok, val in gates:
