@@ -18,11 +18,12 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from app.rag import config as cfg  # noqa: E402
+from app.rag.indexing.geo import GeoIndex  # noqa: E402
 
 EXPECTED = [
     "zhwikivoyage", "enwikivoyage", "geonames-cn", "geonames-cities", "geonames-admin",
     "chinatravel-sandbox-zh", "chinatravel-queries", "ms-address-ner", "ms-geoglue-spec",
-    "ms-poi-national", "ms-travel-dialogue", "ms-touind-qa", "zhwikipedia",
+    "ms-poi-national", "ms-travel-dialogue", "ms-touind-qa", "wikipedia-zh",
 ]
 LABEL = {"zhwikivoyage": "中文维基导游 dump", "enwikivoyage": "英文维基导游 dump",
          "geonames-cn": "GeoNames 中国地名", "geonames-cities": "GeoNames 城市",
@@ -30,7 +31,7 @@ LABEL = {"zhwikivoyage": "中文维基导游 dump", "enwikivoyage": "英文维�
          "chinatravel-queries": "ChineseTravel 查询集", "ms-address-ner": "魔搭 中文地址 NER",
          "ms-geoglue-spec": "魔搭 GeoGLUE", "ms-poi-national": "魔搭 全国 POI",
          "ms-travel-dialogue": "魔搭 旅游对话", "ms-touind-qa": "魔搭 旅游意图问答",
-         "zhwikipedia": "中文维基百科 dump 分片"}
+         "wikipedia-zh": "中文维基百科条目"}
 
 print("== 1) data/manifest.csv ==")
 if not (cfg.DATA / "manifest.csv").exists():
@@ -81,8 +82,31 @@ for name, path in [("documents.jsonl", cfg.PROCESSED / "documents.jsonl"),
     else:
         print("  %-22s 缺失" % name)
 
-print("\n== 5) 结论 ==")
+print("\n== 5) 城市归属一致性 ==")
+geo_bad = []
+docs_path = cfg.PROCESSED / "documents.jsonl"
+geo_path = cfg.PROCESSED / "geo_index.json"
+if docs_path.exists() and geo_path.exists():
+    geo = GeoIndex.load(geo_path)
+    for line in docs_path.open(encoding="utf-8"):
+        d = json.loads(line)
+        parents = [d.get("parent_doc_id")] if d.get("parent_doc_id") else []
+        want_prov, want_city, _ = geo.resolve(d.get("title", ""), parents=parents)
+        # 只校验解析器能确定归属的文档；未知主题页留给 run_split 的范围过滤。
+        if want_prov and (d.get("province") != want_prov
+                          or (want_city and d.get("city") != want_city)):
+            geo_bad.append({"title": d.get("title"),
+                            "stored": [d.get("province"), d.get("city")],
+                            "expected": [want_prov, want_city]})
+    print("  归属冲突：%d 篇" % len(geo_bad))
+    for x in geo_bad[:10]:
+        print("  FAIL %(title)s：现有=%(stored)s，期望=%(expected)s" % x)
+else:
+    print("  跳过：documents.jsonl 或 geo_index.json 不存在")
+
+print("\n== 6) 结论 ==")
 need_missing = [s for s in EXPECTED if not by.get(s)]
 print("  必需数据源缺失：%s" % ("、".join(need_missing) if need_missing else "无"))
 print("  快照不可读：%d" % bad)
-sys.exit(0 if not need_missing else 1)
+print("  城市归属冲突：%d" % len(geo_bad))
+sys.exit(0 if not need_missing and not geo_bad else 1)

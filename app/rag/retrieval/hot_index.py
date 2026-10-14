@@ -112,6 +112,18 @@ def build(pack, verbose: bool = False):
                 buckets.setdefault(term, []).extend((row, freq))
         post = {t: np.asarray(v, dtype=np.int32).reshape(-1, 2) for t, v in buckets.items()}
         buckets = None
+
+        # 标题倒排：doc_title + title_path 的分词（只存行号），用于第 3 路关键词精确匹配
+        import jieba
+        title_buckets = {}
+        for row, md in enumerate(meta):
+            title = "%s %s" % (md.get("doc_title") or "", md.get("title_path") or "")
+            if not title.strip():
+                continue
+            for term in set(jieba.cut(title)):
+                title_buckets.setdefault(term, []).append(row)
+        title_post = {t: np.asarray(v, dtype=np.int32) for t, v in title_buckets.items()}
+        title_buckets = None
         t3 = _t.perf_counter()
 
         k1, b = float(bm.k1), float(bm.b)
@@ -127,6 +139,7 @@ def build(pack, verbose: bool = False):
             "text": text,
             "meta": meta,
             "post": post,
+            "title_post": title_post,
             "idf": bm.idf,
             "k1": k1,
             "k1p1": k1 + 1.0,
@@ -234,6 +247,68 @@ def bm25_search(terms, top_k: int):
         return []
     picked = nz[np.argsort(-scores[nz], kind="stable")[:k]]
     return [{"chunk_id": h["ids"][int(r)], "score_bm25": float(scores[r])} for r in picked]
+
+
+def keyword_search(terms, top_k: int, filters=None, title_boost: float = None, phrases=None):
+    """第 3 路：关键词/标题精确匹配。
+
+    覆盖率为底、标题命中加权：score = (命中词数 + boost × 标题命中词数) / 查询词数。
+    与向量路一样在**过滤后的子集内**排序（关键词路是新加的，不受历史基线约束），
+    因此带 city/category 时不会把外城条目排进来。
+    """
+    h = _HOT
+    np = h["np"]
+    boost = 2.0 if title_boost is None else title_boost
+    uniq = []
+    seen = set()
+    for t in terms:
+        t = (t or "").strip()
+        if t and t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    if not uniq:
+        return []
+    hit = np.zeros(h["n"], dtype=np.float32)
+    title_hit = np.zeros(h["n"], dtype=np.float32)
+    touched = False
+    for t in uniq:
+        e = h["post"].get(t)
+        if e is not None:
+            hit[e[:, 0]] += 1.0
+            touched = True
+        te = h["title_post"].get(t)
+        if te is not None:
+            title_hit[te] += 1.0
+    if not touched:
+        return []
+    rows = candidate_rows(filters)
+    if rows is not None:
+        if len(rows) == 0:
+            return []
+        keep = np.zeros(h["n"], dtype=bool)
+        keep[rows] = True
+        hit = np.where(keep, hit, 0.0)
+        title_hit = np.where(keep, title_hit, 0.0)
+    score = (hit + boost * title_hit) / float(len(uniq))
+    exact = np.zeros(h["n"], dtype=bool)
+    clean_phrases = [p.strip() for p in (phrases or []) if len(p.strip()) >= 2]
+    if clean_phrases:
+        scan_rows = rows if rows is not None else h["_range"]
+        for r in scan_rows:
+            ri = int(r)
+            haystack = "%s %s %s" % (h["text"][ri], h["meta"][ri].get("doc_title", ""),
+                                      h["meta"][ri].get("title_path", ""))
+            if any(p in haystack for p in clean_phrases):
+                exact[ri] = True
+                score[ri] += 4.0
+    nz = np.flatnonzero(score)
+    if len(nz) == 0:
+        return []
+    k = min(int(top_k), len(nz))
+    picked = nz[np.argsort(-score[nz], kind="stable")[:k]]
+    return [{"chunk_id": h["ids"][int(r)], "score_keyword": float(score[r]),
+             "coverage": float(hit[r] / len(uniq)), "title_hits": int(title_hit[r]),
+             "exact_phrase": bool(exact[r])} for r in picked]
 
 
 def lookup(chunk_ids):

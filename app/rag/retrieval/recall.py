@@ -16,7 +16,8 @@ from app.rag.retrieval import hot_index
 _EMB = None
 _BM25 = None
 # 四段耗时（embed_ms / vector_ms / bm25_ms / fuse_ms）+ 元数据读取
-TIMING = {"embed_ms": 0.0, "vector_ms": 0.0, "bm25_ms": 0.0, "fuse_ms": 0.0, "meta_ms": 0.0}
+TIMING = {"embed_ms": 0.0, "vector_ms": 0.0, "bm25_ms": 0.0, "keyword_ms": 0.0,
+          "fuse_ms": 0.0, "rerank_ms": 0.0, "meta_ms": 0.0}
 # 最近一次检索的向量最高相似度（避免调用方为拿这个值再检索一遍）
 LAST_SIM = 0.0
 
@@ -47,7 +48,9 @@ def warmup():
     """服务启动时调用：预热 jieba、BM25、向量器、热索引，并真跑一次检索把链路打通。
     不做这一步，首个真实请求要额外付 3-12 秒冷启动（实测）。"""
     import jieba
+    import jieba.analyse
     jieba.initialize()
+    jieba.analyse.extract_tags("预热")   # TF-IDF 词典首次加载 ~0.7s，别让它算在第一个问题上
     pack = bm25_pack()
     embedder()
     hot_index.build(pack, verbose=True)   # 装进内存；失败自动回退 Chroma
@@ -73,7 +76,7 @@ def vector_search(query: str, top_k: int = None, city: str = None, category: str
     import time
     top_k = top_k or cfg.TOP_K_VECTOR
     t0 = time.perf_counter()
-    vec = embedder().embed_texts([query])[0]
+    vec = embedder().embed_query(query)
     TIMING["embed_ms"] += (time.perf_counter() - t0) * 1000
     if hot_index.ready():          # 内存暴力余弦：实测 126ms -> ~5ms
         t1 = time.perf_counter()
@@ -114,6 +117,60 @@ def bm25_search(query: str, top_k: int = None, city: str = None, category: str =
     TIMING["bm25_ms"] += (time.perf_counter() - t0) * 1000
     order = sorted(range(len(scores)), key=lambda i: -scores[i])[: top_k * 6]
     return [{"chunk_id": pack["ids"][i], "score_bm25": float(scores[i])} for i in order]
+
+
+def keywords_of(query: str, top_k: int = 8) -> list:
+    """抽取检索用关键词：TF-IDF 关键词 + 地名/专名（避免罕见景点名被 TF-IDF 排掉）。"""
+    import jieba.analyse
+    import jieba.posseg as pseg
+    tags = list(jieba.analyse.extract_tags(query, topK=top_k))
+    extra = []
+    for word, flag in pseg.cut(query):
+        if flag in ("ns", "nz", "nr", "nt", "n") and len(word) > 1 and word not in tags:
+            extra.append(word)
+    return (tags + extra)[: top_k + 4]
+
+
+def exact_phrases_of(query: str, entity: str = None) -> list:
+    """抽取用户明确给出的长专名，供正文子串精确召回。"""
+    import re
+    q = (query or "").strip()
+    patterns = [
+        # 优先取“城市的实体在哪里”中间部分，不能让 ^ 分支贪婪吞掉城市。
+        r"的\s*([\u4e00-\u9fffA-Za-z0-9·]{2,30}?)\s*(?:在哪里|在哪|怎么去|地址)",
+        r"[“\"《]([^”\"》]{2,30})[”\"》]",
+    ]
+    generic = {"景点", "美食", "酒店", "住宿", "交通", "开放时间", "门票", "价格"}
+    out = [entity.strip()] if entity and entity.strip() not in generic else []
+    for pat in patterns:
+        for value in re.findall(pat, q):
+            value = value.strip()
+            if value not in generic and value not in out:
+                out.append(value)
+    # 无“的”的自然问法；去掉开头城市名后也能由 dialogue 显式 entity 参数覆盖。
+    for value in re.findall(
+            r"([\u4e00-\u9fffA-Za-z0-9·]{2,24}?)(?:怎么玩|怎么样|值得(?:去)?吗|好玩吗|开放时间|门票)", q):
+        value = value.strip()
+        if value not in generic and value not in out:
+            out.append(value)
+    return out[:3]
+
+
+def keyword_search(query: str, top_k: int = None, city: str = None, category: str = None,
+                   province: str = None, source_type: str = None, entity: str = None):
+    """第 3 路：关键词/标题精确匹配召回。热索引不可用时返回空（不阻断）。"""
+    import time
+    top_k = top_k or cfg.TOP_K_KEYWORD
+    t0 = time.perf_counter()
+    if not hot_index.ready():
+        TIMING["keyword_ms"] += (time.perf_counter() - t0) * 1000
+        return []
+    terms = keywords_of(query)
+    out = hot_index.keyword_search(terms, top_k, {"city": city, "category": category,
+                                                  "province": province, "source_type": source_type},
+                                   phrases=exact_phrases_of(query, entity=entity))
+    TIMING["keyword_ms"] += (time.perf_counter() - t0) * 1000
+    return out
 
 
 def load_meta(chunk_ids):

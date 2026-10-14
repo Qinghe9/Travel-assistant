@@ -31,6 +31,7 @@ evals/*
 !evals/rag_eval.jsonl
 !evals/boundary_eval.jsonl
 !evals/baseline.json
+!evals/run_e2e_latency.py
 
 # ===== 工具与临时产物 =====
 .dsh/

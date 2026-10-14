@@ -22,6 +22,20 @@ from pathlib import Path
 
 from app.rag import config as cfg
 
+_HTTP_CLIENT = None
+
+
+def _http_client():
+    """复用到硅基流动的 TLS 连接，避免每次查询重新握手。"""
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        import httpx
+        _HTTP_CLIENT = httpx.Client(
+            timeout=cfg.EMBED_TIMEOUT,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=60),
+        )
+    return _HTTP_CLIENT
+
 
 class Breaker:
     """熔断：60 秒窗口内连续 5 次失败 -> 打开 60 秒 -> 恢复只放行 1 个探测。"""
@@ -115,6 +129,10 @@ class Embedder:
             cached.update(dict(zip(missing, vecs)))
         return [cached[k] for k in keys]
 
+    def embed_query(self, query: str):
+        """查询专用入口：规范化口语指代后再查缓存，提高多轮改写的缓存复用率。"""
+        return self.embed_texts([normalize_query(query)])[0]
+
     @property
     def dim(self):
         return cfg.EMBED_DIM
@@ -155,14 +173,14 @@ class Embedder:
         for i in range(0, len(texts), self.batch):
             chunk = texts[i:i + self.batch]
             body = json.dumps({"model": self.model, "input": chunk, "encoding_format": "float"}).encode("utf-8")
-            req = urllib.request.Request(url, data=body, headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer %s" % cfg.EMBED_API_KEY})
             last = None
             for attempt in range(1, 5):
                 try:
-                    with urllib.request.urlopen(req, timeout=cfg.EMBED_TIMEOUT) as r:
-                        data = json.loads(r.read().decode("utf-8"))
+                    response = _http_client().post(url, content=body, headers={
+                        "Content-Type": "application/json",
+                        "Authorization": "Bearer %s" % cfg.EMBED_API_KEY})
+                    response.raise_for_status()
+                    data = response.json()
                     rows = sorted(data["data"], key=lambda x: x.get("index", 0))
                     out.extend([row["embedding"] for row in rows])
                     self._log("    批次 %d/%d 完成" % (i // self.batch + 1, (len(texts) + self.batch - 1) // self.batch))
@@ -203,3 +221,14 @@ def _index_model():
 def _sha1(text: str) -> str:
     import hashlib
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def normalize_query(query: str) -> str:
+    """将等价追问归一成稳定缓存键，不改动建库文档。"""
+    import re
+    q = (query or "").strip()
+    q = re.sub(r"\b(?:请问|麻烦问下|我想知道)\b", "", q)
+    q = re.sub(r"(那里|那边|这里|这边|它|这个|那个)(?=的|有|怎|开|门|价|地|$)", "", q)
+    q = re.sub(r"\s*的(?=开放|门票|价格|地址|位置|交通|营业)", " ", q)
+    q = re.sub(r"[呢吗吧啊呀？?！!，,。]+$", "", q)
+    return re.sub(r"\s+", " ", q).strip()

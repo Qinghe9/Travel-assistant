@@ -46,6 +46,28 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
 
 检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）都在仓库里，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
 
+## 检索架构：三路召回 + 重排 + 多轮
+
+| 环节 | 做法 | 实测 |
+|---|---|---|
+| 第 1 路 向量 | 内存暴力余弦（12k 已归一化向量） | ~5 ms |
+| 第 2 路 BM25 | 倒排候选 + numpy 向量化打分（与 rank_bm25 逐位一致） | ~4 ms |
+| 第 3 路 关键词/标题 | 标题倒排加权 + 关键词覆盖率，专治专名/景点名 | ~10 ms |
+| 融合 | RRF（按名次，避免分数量纲不可比），三路等权 | <1 ms |
+| 重排 | **默认关闭**（原因见下）；开启时用硅基流动 `BAAI/bge-reranker-v2-m3`，失败自动退回融合序 | ~0.3 s |
+| 生成 | DeepSeek `deepseek-chat`，SSE 真流式并记录 TTFT | 完整时延单独观测 |
+| 多轮 | 查询改写（0.6 s 预算，超时回落规则式）+ 槽位继承（城市/类别跨轮不丢） | ≤0.6 s/追问 |
+
+- **重排为什么默认关闭**：实测在**带过滤的产品路径**上它零增益——不重排的基线 Top3 命中率已是 1.000，
+  MRR 反而更高（0.9602 vs 0.9516），却要多花 ~300 ms 并多一个网络故障点（免费档抖动时它会超时降级）。
+  只有**无过滤（open）**场景值得开：Recall@3 0.871→0.923，此时建议 `RAG_RERANK_CANDIDATES=20`；
+  需要时设 `RAG_RERANK_ENABLED=1`。
+- **类别过滤不可靠**：chunk 的 `category` 里 tips 占 53.9%（成都 66 个 chunk 里 food=0），硬过滤会把池子清空，
+  因此在 [fuse.py](app/rag/retrieval/fuse.py) 里做了「滤空就退回只按城市」的自动降级。
+- **端到端时延**：`python evals/run_e2e_latency.py` 以首个内容 token 的 P95 ≤2 秒为门禁；
+  完整响应时间只观测，不再为了 2 秒强行截断。生成失败时使用 query-aware 相关句兜底，
+  兜底率单独设门禁（默认 ≤5%），不会再混入正常生成冒充达标。
+
 ## 检索性能（进程内热索引）
 
 [app/rag/retrieval/hot_index.py](app/rag/retrieval/hot_index.py) 把向量矩阵、正文元数据、词法倒排一次性装进内存，检索阶段从「Chroma 往返 + 全库 BM25 打分」变成「内存矩阵乘法 + 倒排候选」：

@@ -96,14 +96,85 @@ BM25_K1 = float(_env("RAG_BM25_K1", "1.5"))
 BM25_B = float(_env("RAG_BM25_B", "0.75"))
 MAX_PER_PARENT = int(_env("RAG_MAX_PER_PARENT", "2"))
 
-# 对话模型（DeepSeek）
-LLM_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-LLM_API_KEY = _env("DEEPSEEK_API_KEY", "")
-LLM_MODEL = _env("LLM_MODEL", "deepseek-chat")
-LLM_TIMEOUT = int(_env("LLM_TIMEOUT", "15"))
+# 对话模型（DeepSeek）；embedding / rerank 仍使用硅基流动，凭据严格分离。
+LLM_TIMEOUT = int(_env("LLM_TIMEOUT", "8"))
 LLM_MAX_RETRY = int(_env("LLM_MAX_RETRY", "1"))
+# 重试退避：端到端预算只有 2 秒，指数退避（2s/4s）会把 P95 直接推过线，这里用短退避
+LLM_RETRY_BACKOFF = float(_env("LLM_RETRY_BACKOFF", "0.4"))
 LLM_TEMPERATURE = float(_env("LLM_TEMPERATURE", "0.2"))
-LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "1024"))
+# 2 秒指标只约束首 token，不再为了完整响应时延强行截断答案。
+# 推荐/规划题的 3-5 个带引用要点经常超过 256 token；TTFT 门禁与完整输出长度
+# 无关，因此提高上限，避免流在 source_id 输出到一半时被截断。
+LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "512"))
+
+# ---------------- 模型服务 ----------------
+# 硅基流动只负责 embedding / rerank。
+SF_BASE_URL = _env("RAG_SF_BASE_URL", _env("RAG_EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
+SF_API_KEY = _env("RAG_SF_API_KEY", _env("RAG_EMBED_API_KEY", ""))
+
+# 对话与辅助改写默认都走 DeepSeek。LLM_* 显式配置仍可覆盖。
+LLM_BASE_URL = _env("LLM_BASE_URL", _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
+LLM_API_KEY = _env("LLM_API_KEY", _env("DEEPSEEK_API_KEY", ""))
+LLM_MODEL = _env("RAG_LLM_MODEL", _env("LLM_MODEL", "deepseek-chat"))
+LLM_HELPER_MODEL = _env("RAG_LLM_HELPER_MODEL", LLM_MODEL)
+LLM_HELPER_MAX_TOKENS = int(_env("RAG_LLM_HELPER_MAX_TOKENS", "32"))   # 改写只输出一句问句
+# 每段证据的压缩预算。answer.py 会按查询相关性选句，不再截取固定前缀。
+EVIDENCE_MAX_CHARS = int(_env("RAG_EVIDENCE_MAX_CHARS", "900"))
+EVIDENCE_TOTAL_CHARS = int(_env("RAG_EVIDENCE_TOTAL_CHARS", "1600"))
+
+# 重排序：bge-reranker-v2-m3 实测 ~255ms（3 篇），免费档可用
+# 默认关闭：实测在**带过滤的产品路径**上重排零增益（不重排的基线 Top3 命中率已是 1.000，
+# MRR 还更高 0.9602 vs 0.9516），却要多花 ~300ms 并引入一个网络故障点。
+# 只有"无过滤(open)"场景才有价值（Recall@3 0.871→0.923，且需 RERANK_CANDIDATES>=20）；
+# 需要时用 RAG_RERANK_ENABLED=1 打开。
+RERANK_ENABLED = _env("RAG_RERANK_ENABLED", "0") not in ("0", "false", "False", "")
+RERANK_BASE_URL = _env("RAG_RERANK_BASE_URL", SF_BASE_URL)
+RERANK_API_KEY = _env("RAG_RERANK_API_KEY", SF_API_KEY)
+RERANK_MODEL = _env("RAG_RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANK_CANDIDATES = int(_env("RAG_RERANK_CANDIDATES", "6"))   # 送进重排的候选数（越多越准也越慢）
+RERANK_TIMEOUT = float(_env("RAG_RERANK_TIMEOUT", "1.2"))   # 超过就退回融合序，不拖垮 2 秒预算
+RERANK_MIN_SCORE = float(_env("RAG_RERANK_MIN_SCORE", "0.0"))  # 低于此分视为无关（0=不启用）
+
+# 第 3 路：关键词/标题精确匹配召回
+KEYWORD_ENABLED = _env("RAG_KEYWORD_ENABLED", "1") not in ("0", "false", "False", "")
+TOP_K_KEYWORD = int(_env("RAG_TOP_K_KEYWORD", "10"))
+KEYWORD_TITLE_BOOST = float(_env("RAG_KEYWORD_TITLE_BOOST", "2.0"))
+# RRF 权重：等权会让"只在一路出现"的候选稀释共识，关键词路实测要降权
+KEYWORD_WEIGHT = float(_env("RAG_KEYWORD_WEIGHT", "1.0"))
+# 城市条目优先：查询指定城市时，给"来自该城市自身条目"（doc_title == city）的 chunk 加一点分。
+# 否则省级文档（广东）的概述/行政区划段落会挤掉城市条目（广州）的景点内容。
+CITY_DOC_BOOST = float(_env("RAG_CITY_DOC_BOOST", "0.012"))
+# 关键词覆盖率门槛：低于此比例的候选不进融合（挡掉只命中一个通用词的噪声）
+KEYWORD_MIN_COVERAGE = float(_env("RAG_KEYWORD_MIN_COVERAGE", "0.0"))
+# 完整专名（如“寻甸汽车客运站”）命中正文时的确定性加分，避免被多路通用词共识挤出 Top3。
+EXACT_PHRASE_BOOST = float(_env("RAG_EXACT_PHRASE_BOOST", "0.04"))
+
+# 多轮对话
+DIALOGUE_MAX_TURNS = int(_env("RAG_DIALOGUE_MAX_TURNS", "6"))
+# 追问改写模式：auto=先用 LLM（有预算）超时回落规则式 | llm=只用 LLM | rule=只用规则式(零延迟) | off=不改写
+# 实测规则式（把继承的城市拼进问句）与 LLM 改写的检索信号等价（余弦差 <0.005、Top3 大量重合），
+# 所以 DIALOGUE_REWRITE=rule 可以把追问的 ~0.5s 改写开销直接省掉。
+# 默认 rule（规则式改写：把继承的城市拼进问句，零延迟）。
+# 实测（yolo 环境，8 单轮 + 5 轮追问）：auto 的兜底 6/13、P95 2022ms；
+# rule 的兜底 4/13、P95 1931ms，而检索结果等价（余弦差 <0.005、Top3 大量重合）。
+# 想要更"漂亮"的改写展示可以设 auto/llm，代价是每轮多花 0.3~0.5s 生成预算。
+DIALOGUE_REWRITE = _env("RAG_DIALOGUE_REWRITE", "rule")
+
+# 接地校验（逐句蕴含检查）：默认开，失败自动降级
+FAITHFULNESS_CHECK = _env("RAG_FAITHFULNESS_CHECK", "1") not in ("0", "false", "False", "")
+
+# 完整响应只受正常网络超时保护；2 秒门禁改由流式请求的 TTFT 指标承担。
+ANSWER_TIMEOUT = float(_env("RAG_ANSWER_TIMEOUT", "30"))
+TTFT_GATE_S = float(_env("RAG_TTFT_GATE_S", "2.0"))
+# 多轮改写超时：超时就用原问句检索（大概率仍可召回）
+# 0.6s：超过就用规则式改写（检索等价、零延迟），别让一次改写吃掉 2 秒预算的三分之一
+DIALOGUE_REWRITE_TIMEOUT = float(_env("RAG_DIALOGUE_REWRITE_TIMEOUT", "0.3"))
+# 接地校验：句子实词在**被引证据**里的覆盖率低于该值即判为编造、整句剔除；
+# 另外句中的数字（票价/时刻/电话）必须逐字出现在证据里。
+# 0.35：词面覆盖对"合法复述"天然偏低（实测 0.33 的句子其实有据），
+# 所以覆盖率只做粗筛；真正的硬约束是"数字必须出现在证据里"。
+GROUNDING_MIN_COVERAGE = float(_env("RAG_GROUNDING_MIN_COVERAGE", "0.35"))
+
 
 CHUNKS_FILE = PROCESSED / "chunks.jsonl"
 MANIFEST_FILE = INDEX / "IndexManifest.json"

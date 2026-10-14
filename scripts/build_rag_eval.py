@@ -95,10 +95,24 @@ for c in chunks:
         card_items.append((name, c))
         break
 random.shuffle(card_items)
-for name, c in card_items[:60]:
+seen_fact_queries = set()
+for name, c in card_items:
+    fact_key = (c["city"], name)
+    if fact_key in seen_fact_queries:
+        continue
+    seen_fact_queries.add(fact_key)
+    # 同一实体可能因 overlap、来源合并或相邻卡片出现在多个 chunk；这些都是正确答案，
+    # 不能只标注随机抽中的一个 chunk，否则会把精确召回误判为 false negative。
+    rel = [x for x in by_city[c["city"]]
+           if name in (x.get("text") or "")
+           or name == (x.get("doc_title") or "")
+           or name in (x.get("title_path") or "")]
     items.append({"query": "%s的%s 在哪里？" % (c["city"], name),
                   "city": c["city"], "category": None, "type": "fact_rule",
-                  "relevant_source_ids": [sid(c)]})
+                   "entity": name,
+                   "relevant_source_ids": sorted({sid(x) for x in (rel or [c])})})
+    if len(seen_fact_queries) >= 60:
+        break
 
 # 4) 跨城路线题
 transport = collections.defaultdict(list)

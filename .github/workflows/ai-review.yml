@@ -3,19 +3,26 @@ name: 代码自动审查
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:          # 支持手动跑一次，方便先验证配置是否生效
+    inputs:
+      pr:
+        description: PR 编号（手动跑时填，例如 2）
+        required: false
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: write        # 发 PR 评论
+  issues: write               # PR 评论走的是 issues 接口，两个都开更稳
 
 concurrency:
-  group: review-${{ github.event.pull_request.number }}
+  group: review-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   static:
     name: 静态审查（注释到 diff）
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,14 +33,61 @@ jobs:
       - name: ruff（问题直接标注在 PR 改动行上；只提示不拦截，拦截交给 CI）
         run: ruff check --select E9,F63,F7,F82,F401,F841 --output-format=github --exit-zero .
       - name: 全量语法编译
-        run: python -m compileall -q app scripts .github/scripts
+        run: python -m compileall -q app scripts evals .github/scripts
+
+  secret-scan:
+    name: 密钥扫描（提交前拦截）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 扫描本 PR 的新增行
+        run: |
+          python - <<'PY'
+          import re, subprocess, sys
+          base = "origin/${{ github.base_ref }}"
+          subprocess.run(["git", "fetch", "origin", base, "--depth=1"], check=False)
+          diff = subprocess.run(["git", "diff", base + "...HEAD"],
+                                capture_output=True, text=True).stdout
+          pats = [
+              (r"\bsk-[A-Za-z0-9_\-]{16,}", "疑似 API Key（sk- 开头）"),
+              (r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}", "疑似 GitHub Token"),
+              (r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "私钥内容"),
+              (r"(?i)\b(?:api[_-]?key|secret|passwd|password|token)\s*[:=]\s*[\x22\x27][^\x22\x27\s]{16,}[\x22\x27]",
+               "硬编码的密钥/口令"),
+          ]
+          hits, path = [], ""
+          for line in diff.splitlines():
+              if line.startswith("+++ b/"):
+                  path = line[6:].strip()
+                  continue
+              if not line.startswith("+") or line.startswith("+++"):
+                  continue
+              if path.split("/")[-1] == ".env":
+                  hits.append((path, "提交了 .env 文件", ""))
+                  continue
+              for pat, label in pats:
+                  m = re.search(pat, line[1:])
+                  if m:
+                      hits.append((path, label, len(m.group(0))))
+          for p, label, n in hits:
+              # 只报位置和类型，绝不回显命中内容（日志和评论都是公开的）
+              print("::error file=%s::%s（命中 %d 字符，内容不展示）" % (p, label, n))
+          if hits:
+              print("检出 %d 处疑似密钥，请删除并轮换后再提交。" % len(hits))
+              sys.exit(1)
+          print("密钥扫描通过：新增行里没有发现密钥特征。")
+          PY
 
   ai:
     name: AI 审查（DeepSeek）
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: static
     # fork 来的 PR 拿不到仓库 Secret，直接跳过
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -45,4 +99,6 @@ jobs:
           REVIEW_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           REVIEW_API_BASE: ${{ vars.REVIEW_API_BASE || 'https://api.deepseek.com/v1' }}
           REVIEW_MODEL: ${{ vars.REVIEW_MODEL || 'deepseek-chat' }}
+          REVIEW_MAX_DIFF: ${{ vars.REVIEW_MAX_DIFF || '60000' }}
+          PR_NUMBER: ${{ inputs.pr }}
         run: python .github/scripts/ai_review.py
