@@ -15,12 +15,13 @@ def source_id(source_url: str, chunk_id: str) -> str:
     return hashlib.sha1(("%s#%s" % (source_url, chunk_id)).encode("utf-8")).hexdigest()[:12]
 
 
-def build_evidence(query: str, city: str = None, category: str = None, top_k: int = None) -> dict:
+def build_evidence(query: str, city: str = None, category: str = None, entity: str = None,
+                   top_k: int = None) -> dict:
     from app.rag.retrieval import recall as _R
     from app.rag.retrieval.fuse import search_with_score
     _R.reset_timing()
     t0 = time.perf_counter()
-    hits, max_score = search_with_score(query, city=city, category=category, top_k=top_k)
+    hits, max_score = search_with_score(query, city=city, category=category, entity=entity, top_k=top_k)
     latency = int((time.perf_counter() - t0) * 1000)
 
     citations, chunks = [], []
@@ -55,6 +56,7 @@ def build_evidence(query: str, city: str = None, category: str = None, top_k: in
         "query": query,
         "city": city,
         "category": category,
+        "entity": entity,
         "chunks": chunks,
         "citations": citations,
         "tool_refs": [],

@@ -103,7 +103,9 @@ LLM_MAX_RETRY = int(_env("LLM_MAX_RETRY", "1"))
 LLM_RETRY_BACKOFF = float(_env("LLM_RETRY_BACKOFF", "0.4"))
 LLM_TEMPERATURE = float(_env("LLM_TEMPERATURE", "0.2"))
 # 2 秒指标只约束首 token，不再为了完整响应时延强行截断答案。
-LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "256"))
+# 推荐/规划题的 3-5 个带引用要点经常超过 256 token；TTFT 门禁与完整输出长度
+# 无关，因此提高上限，避免流在 source_id 输出到一半时被截断。
+LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "512"))
 
 # ---------------- 模型服务 ----------------
 # 硅基流动只负责 embedding / rerank。

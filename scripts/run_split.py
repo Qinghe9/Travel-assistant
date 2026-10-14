@@ -31,14 +31,18 @@ for extra in ("wikipedia_docs.jsonl",):
 
 # 港澳台不在 GeoNames CN.txt 中，用标题白名单补省籍
 PROV_OVERRIDE = {"香港": "香港", "澳门": "澳门", "澳门特别行政区": "澳门", "台湾": "台湾",
-                 "臺灣": "台湾", "台北": "台湾", "高雄": "台湾", "台中": "台湾", "台南": "台湾"}
+                 "臺灣": "台湾", "台北": "台湾", "臺北": "台湾", "新北": "台湾",
+                 "桃园": "台湾", "桃園": "台湾", "高雄": "台湾", "台中": "台湾",
+                 "臺中": "台湾", "台南": "台湾", "臺南": "台湾", "基隆": "台湾",
+                 "新竹": "台湾", "嘉义": "台湾", "嘉義": "台湾"}
 # 明确以中国为对象的旅行主题页（无省籍但属中国旅行知识）
 CHINA_TOPICS = {"中国", "中国东北", "中国东南", "丝绸之路", "318国道", "京杭大運河沿線",
                 "京杭大运河沿线", "中国到新加坡的铁路旅行", "中华老字号", "中国国家公园"}
 
 
 def prov_of(d):
-    return d.get("province") or PROV_OVERRIDE.get(d["title"])
+    head = (d["title"] or "").split("/", 1)[0]
+    return d.get("province") or PROV_OVERRIDE.get(d["title"]) or PROV_OVERRIDE.get(head)
 
 
 def is_china_doc(d):

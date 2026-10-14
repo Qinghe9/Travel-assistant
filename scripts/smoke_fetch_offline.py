@@ -94,7 +94,20 @@ items = [{"chunk_id": "1", "metadata": {"parent_doc_id": "p"}},
          {"chunk_id": "3", "metadata": {"parent_doc_id": "p"}}]
 check("同源每篇最多保留 2 条", len(dedup_by_parent(items)) == 2)
 
-from app.rag.generation.answer import compress_evidence, extractive_answer  # noqa: E402
+from app.rag.indexing.geo import GeoIndex  # noqa: E402
+geo = GeoIndex()
+geo.name2rec["松山"] = {"level": "county", "prov": "内蒙古", "city": "赤峰",
+                         "county": "松山区"}
+geo.name2rec["三峡"] = {"level": "county", "prov": "江苏", "city": "常州",
+                         "county": "新北区"}
+check("臺北/松山不会错挂赤峰", geo.resolve("臺北/松山")[:2] == ("台湾", "台北"),
+      str(geo.resolve("臺北/松山")))
+check("新北/三峡不会错挂常州", geo.resolve("新北/三峽")[:2] == ("台湾", "新北"),
+      str(geo.resolve("新北/三峽")))
+check("未知父级不凭尾部反推城市", geo.resolve("海外/松山") == (None, None, None),
+      str(geo.resolve("海外/松山")))
+
+from app.rag.generation.answer import compress_evidence, extractive_answer, post_validate  # noqa: E402
 long_text = "成都概况与人口信息。" * 40 + "武侯祠开放时间为08:00到18:00，门票50元。" + "行政区划信息。" * 30
 compressed = compress_evidence("武侯祠开放时间和门票", long_text, 160)
 check("query-aware 证据压缩保留相关尾句", "08:00" in compressed and "50元" in compressed, compressed[:80])
@@ -104,6 +117,15 @@ ev = {"query": "武侯祠开放时间", "chunks": [
 fallback = extractive_answer(ev, max_points=1)
 check("抽取兜底按问题相关性排序", "开放时间" in fallback and "aaaaaaaaaaaa" in fallback, fallback)
 
+# 回归：模型通常把引用放在句号之后；校验器不能先按句号切开，把引用误判成孤立编号。
+bound, dropped, unbound = post_validate(
+    "1. 苏堤可骑单人自行车游览。[aaaaaaaaaaaa]\n"
+    "2. 断桥全天开放且免费。[aaaaaaaaaaaa]",
+    [{"source_id": "aaaaaaaaaaaa"}],
+)
+check("句号后引用不会被错误拆开", "苏堤" in bound and "断桥" in bound and not dropped and not unbound,
+      bound)
+
 from app.rag.generation.dialogue import DialogueSession, prepare_turn  # noqa: E402
 session = DialogueSession()
 session.slots = {"city": "成都", "entity": "武侯祠", "category": "attraction"}
@@ -112,5 +134,5 @@ rewritten, slots = prepare_turn("它的开放时间是什么？", session)
 check("多轮追问继承实体", "武侯祠" in rewritten and slots.get("entity") == "武侯祠", rewritten)
 
 print("-" * 60)
-print("通过 %d 项，失败 %d 项" % (15 - len(FAIL), len(FAIL)))
+print("通过 %d 项，失败 %d 项" % (19 - len(FAIL), len(FAIL)))
 sys.exit(1 if FAIL else 0)

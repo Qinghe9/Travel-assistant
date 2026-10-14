@@ -92,8 +92,9 @@ def run_mode(mode):
     for it in items:
         city = it.get("city") if mode == "filter" else None
         cat = it.get("category") if mode == "filter" else None
+        entity = it.get("entity") if mode == "filter" else None
         t0 = time.perf_counter()
-        hits, _ = search_with_score(it["query"], city=city, category=cat, top_k=K)
+        hits, _ = search_with_score(it["query"], city=city, category=cat, entity=entity, top_k=K)
         dt = int((time.perf_counter() - t0) * 1000)
         lat.append(dt)
         relevant = set(it.get("relevant_source_ids") or [])

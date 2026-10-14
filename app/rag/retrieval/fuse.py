@@ -63,7 +63,7 @@ def _meta_match(meta: dict, item: dict, want: dict) -> bool:
 
 def search_with_score(query: str, city: str = None, category: str = None, province: str = None,
                       top_k: int = None, source_type: str = None, min_score: float = None,
-                      rerank: bool = None):
+                      rerank: bool = None, entity: str = None):
     """多路混合检索主入口。返回 (items, max_fused_score)。rerank=None 时用配置开关。"""
     import time as _t
     from app.rag.retrieval import recall as R
@@ -71,12 +71,12 @@ def search_with_score(query: str, city: str = None, category: str = None, provin
     filters = {"city": city, "category": category, "province": province, "source_type": source_type}
     has_filter = any(filters.values())
     use_rerank = cfg.RERANK_ENABLED if rerank is None else rerank
-    query_phrases = R.exact_phrases_of(query)
+    query_phrases = R.exact_phrases_of(query, entity=entity)
 
     def _recall(cat):
         bb = R.bm25_search(query, city=city, category=cat, province=province, source_type=source_type)
         kk = (R.keyword_search(query, city=city, category=cat, province=province,
-                               source_type=source_type) if cfg.KEYWORD_ENABLED else [])
+                               source_type=source_type, entity=entity) if cfg.KEYWORD_ENABLED else [])
         ids = [x["chunk_id"] for x in bb] + [x["chunk_id"] for x in kk]
         mm = R.load_meta(ids) if ids else {}
         if has_filter:                      # BM25/关键词路无内建过滤，按元数据后置筛
@@ -184,7 +184,7 @@ def top_similarity(query: str, **filters):
 
 
 def search(query: str, city: str = None, category: str = None, province: str = None,
-           top_k: int = None, source_type: str = None):
+           top_k: int = None, source_type: str = None, entity: str = None):
     """对外接口：返回 TopK 证据列表。"""
     return search_with_score(query, city=city, category=category, province=province,
-                             top_k=top_k, source_type=source_type)[0]
+                             top_k=top_k, source_type=source_type, entity=entity)[0]

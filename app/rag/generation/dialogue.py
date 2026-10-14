@@ -82,6 +82,10 @@ def detect_entity(text: str, city: str = None):
     quoted = re.search(r"[“\"《]([^”\"》]{2,24})[”\"》]", q)
     if quoted and quoted.group(1) not in _GENERIC_ENTITY:
         return quoted.group(1)
+    # “西湖怎么玩 / 武侯祠怎么样 / 雷峰塔值得吗”这类没有“的”的显式实体问法。
+    intent = re.search(r"^([\u4e00-\u9fffA-Za-z0-9·]{2,24}?)(?:怎么玩|怎么样|值得(?:去)?吗|好玩吗|介绍一下)", q)
+    if intent and intent.group(1) not in _GENERIC_ENTITY:
+        return intent.group(1)
     for suffix in _ENTITY_SUFFIXES:
         m = re.search(r"([\u4e00-\u9fffA-Za-z0-9·]{1,20}%s)" % re.escape(suffix), q)
         if m and m.group(1) not in _GENERIC_ENTITY:
@@ -246,7 +250,7 @@ def answer_turn(query: str, session: DialogueSession, city: str = None, category
     rewritten, slots = prepare_turn(query, session, city=city, category=category)
     rewrite_ms = int((time.perf_counter() - t0) * 1000)
     result = answer(rewritten, city=slots.get("city"), category=slots.get("category"),
-                    top_k=top_k, keep_unbound=keep_unbound)
+                    entity=slots.get("entity"), top_k=top_k, keep_unbound=keep_unbound)
     result["original_query"] = query
     result["rewritten_query"] = rewritten
     result["slots"] = slots

@@ -131,7 +131,7 @@ def keywords_of(query: str, top_k: int = 8) -> list:
     return (tags + extra)[: top_k + 4]
 
 
-def exact_phrases_of(query: str) -> list:
+def exact_phrases_of(query: str, entity: str = None) -> list:
     """抽取用户明确给出的长专名，供正文子串精确召回。"""
     import re
     q = (query or "").strip()
@@ -141,17 +141,23 @@ def exact_phrases_of(query: str) -> list:
         r"[“\"《]([^”\"》]{2,30})[”\"》]",
     ]
     generic = {"景点", "美食", "酒店", "住宿", "交通", "开放时间", "门票", "价格"}
-    out = []
+    out = [entity.strip()] if entity and entity.strip() not in generic else []
     for pat in patterns:
         for value in re.findall(pat, q):
             value = value.strip()
             if value not in generic and value not in out:
                 out.append(value)
+    # 无“的”的自然问法；去掉开头城市名后也能由 dialogue 显式 entity 参数覆盖。
+    for value in re.findall(
+            r"([\u4e00-\u9fffA-Za-z0-9·]{2,24}?)(?:怎么玩|怎么样|值得(?:去)?吗|好玩吗|开放时间|门票)", q):
+        value = value.strip()
+        if value not in generic and value not in out:
+            out.append(value)
     return out[:3]
 
 
 def keyword_search(query: str, top_k: int = None, city: str = None, category: str = None,
-                   province: str = None, source_type: str = None):
+                   province: str = None, source_type: str = None, entity: str = None):
     """第 3 路：关键词/标题精确匹配召回。热索引不可用时返回空（不阻断）。"""
     import time
     top_k = top_k or cfg.TOP_K_KEYWORD
@@ -162,7 +168,7 @@ def keyword_search(query: str, top_k: int = None, city: str = None, category: st
     terms = keywords_of(query)
     out = hot_index.keyword_search(terms, top_k, {"city": city, "category": category,
                                                   "province": province, "source_type": source_type},
-                                   phrases=exact_phrases_of(query))
+                                   phrases=exact_phrases_of(query, entity=entity))
     TIMING["keyword_ms"] += (time.perf_counter() - t0) * 1000
     return out
 

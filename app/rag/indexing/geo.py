@@ -22,6 +22,19 @@ PROVINCES = ["北京", "天津", "河北", "山西", "内蒙古", "辽宁", "吉
              "新疆", "香港", "澳门", "台湾"]
 MUNICIPALITIES = {"北京", "天津", "上海", "重庆", "香港", "澳门"}
 
+# GeoNames 的 CN.zip 不含台湾，港澳台子页面又大量使用“A/B”标题。若只拿 B
+# 去匹配大陆同名区县，会把“臺北/松山”错挂到赤峰、“新北/三峡”错挂到常州。
+# 这里登记可确定的一级目的地；区级 B 只有在与 A 的省市归属一致时才会采用。
+SPECIAL_ADMIN = {
+    "台湾": ("台湾", None), "台北": ("台湾", "台北"), "新北": ("台湾", "新北"),
+    "桃园": ("台湾", "桃园"), "台中": ("台湾", "台中"), "台南": ("台湾", "台南"),
+    "高雄": ("台湾", "高雄"), "基隆": ("台湾", "基隆"), "新竹": ("台湾", "新竹"),
+    "嘉义": ("台湾", "嘉义"), "宜兰": ("台湾", "宜兰"), "苗栗": ("台湾", "苗栗"),
+    "彰化": ("台湾", "彰化"), "南投": ("台湾", "南投"), "云林": ("台湾", "云林"),
+    "屏东": ("台湾", "屏东"), "台东": ("台湾", "台东"), "花莲": ("台湾", "花莲"),
+    "澎湖": ("台湾", "澎湖"), "香港": ("香港", "香港"), "澳门": ("澳门", "澳门"),
+}
+
 PROV_FALLBACK = {
     "Beijing Shi": "北京", "Tianjin Shi": "天津", "Shanghai Shi": "上海", "Chongqing Shi": "重庆",
     "Hebei": "河北", "Shanxi": "山西", "Inner Mongolia Autonomous Region": "内蒙古",
@@ -100,6 +113,10 @@ class GeoIndex:
         self.canon2alias = defaultdict(set)
         for a, c in HAND_CURATED.items():
             self.canon2alias[c].add(a)
+        for name, (prov, city) in SPECIAL_ADMIN.items():
+            rec = dict(level="city" if city else "province", prov=prov, city=city,
+                       county=None, lat=None, lon=None, geonameid=None)
+            self.name2rec[name] = rec
 
     @classmethod
     def build(cls, zip_path, cache_path=None, corpus_text=None, corpus_names=None):
@@ -208,17 +225,34 @@ class GeoIndex:
 
     def resolve(self, title, text="", parents=()):
         """返回 (province, city, county)；只用标题、A/B 结构与 ispartof 链。"""
+        title = _norm(title or "")
         if "/" in title:
             head, tail = title.split("/", 1)
             rec_h, rec_t = self.name2rec.get(head), self.name2rec.get(tail)
-            if rec_h or rec_t:
-                base = rec_h or rec_t
-                county = None
-                if rec_t and rec_t["level"] in ("county", "city"):
-                    county = rec_t["county"] or rec_t["city"]
-                elif rec_h and rec_h["level"] == "county":
-                    county = rec_h["county"]
-                return base["prov"], (rec_h or {}).get("city") or (rec_t or {}).get("city"), county
+            # A/B 必须先可靠识别 A。只命中 B 时歧义极大，绝不能用它反推整篇归属。
+            if rec_h:
+                city = rec_h.get("city")
+                county = rec_h.get("county") if rec_h.get("level") == "county" else None
+                # B 仅在省份相同，且双方城市不冲突时作为下级行政区使用。
+                compatible = (rec_t and rec_t.get("prov") == rec_h.get("prov")
+                              and (not city or not rec_t.get("city") or rec_t.get("city") == city))
+                if compatible:
+                    city = city or rec_t.get("city")
+                    if rec_t.get("level") in ("county", "city"):
+                        county = rec_t.get("county") or (rec_t.get("city") if city != rec_t.get("city") else None)
+                return rec_h.get("prov"), city, county
+            # head 未识别时继续尝试父级，不允许降级到 tail。
+        # 裸标题（如“五峰乡”“吉安乡”）在两岸可能同名。若 ispartof 父级能
+        # 确定到城市，父级上下文比全国地名表中的同名命中更可靠。
+        for p in parents:
+            p_prov, p_city, p_county = self.resolve(p, parents=())
+            if p_prov and p_city:
+                rec = next((self.name2rec.get(c) for c in self._candidates(title)
+                            if self.name2rec.get(c)), None)
+                compatible = rec and rec.get("prov") == p_prov and (
+                    not rec.get("city") or rec.get("city") == p_city)
+                county = ((rec.get("county") or rec.get("city")) if compatible else p_county)
+                return p_prov, p_city, county
         for cand in self._candidates(title):
             rec = self.name2rec.get(cand)
             if rec:
@@ -234,8 +268,8 @@ class GeoIndex:
     def _candidates(title):
         out = [title]
         if "/" in title:
-            head, tail = title.split("/", 1)
-            out += [head, tail]
+            head, _tail = title.split("/", 1)
+            out.append(head)
         for suffix in SUFFIX:
             if title.endswith(suffix) and len(title) > len(suffix):
                 out.append(title[: -len(suffix)])
@@ -256,7 +290,9 @@ class GeoIndex:
         idx = cls()
         idx.adm1_code2prov = d["adm1_code2prov"]
         idx.adm2_code2city = d["adm2_code2city"]
-        idx.name2rec = d["name2rec"]
+        # 保留代码内的港澳台确定性映射；磁盘中的 CN GeoNames 记录只补充其余名称。
+        for name, rec in d["name2rec"].items():
+            idx.name2rec.setdefault(name, rec)
         idx.alias2canon = d["alias_to_canonical"]
         idx.canon2alias = defaultdict(set, {k: set(v) for k, v in d["canonical_to_aliases"].items()})
         return idx
