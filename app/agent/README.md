@@ -15,13 +15,13 @@ app/agent/
   prompts.py              提示词集中管理（含注入防护措辞）
   llm.py                  大模型调用（复用 app.rag.generation.llm）+ JSON 校验
   retrieval.py            检索适配层：把 RAG 包装成"可降级"
-  nodes.py                九个节点实现
+  nodes.py                主链、缺槽、闲聊、解释追问与酒店 RAG 回退节点
   graph.py                主图组装与编译
   memory.py               checkpointer（sqlite / memory）
 app/tools/
   base.py                 Provider 抽象：ToolResult + TTL 缓存 + 熔断 + 计时
   weather.py              Open-Meteo 天气（无需 Key，直接可用）
-  amap.py                 高德：景点/酒店/餐饮 POI、路线 / 天气
+  amap.py                 高德：景点/酒店/餐饮 POI、驾车/公交换乘、天气
   showapi.py              万维易源：节假日/调休、城市空气质量（免费接口）
   poi.py                  OpenTripMap 景点（需 Key）
   route.py                路线距离骨架（需 Key）
@@ -42,7 +42,7 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 | INT-03 交通查询 | 广州到长沙高铁 / 天河区到广州塔怎么坐地铁 | origin, destination_place（高铁加 date） | tools | 高德驾车 + 公交/地铁换乘 + 铁路（需凭据） |
 
 > 高德没有 12306 车次/余票接口：公交/地铁可查线路与站点，高铁车次必须由正式铁路供应商提供，缺失时如实说明。
-| INT-04 住宿查询 | 广州天河区附近有什么酒店 | destination | retrieve → tools | 知识库 + 高德酒店 POI（仅名称/区域/地址） |
+| INT-04 住宿查询 | 广州天河区附近有什么酒店 | destination | tools →（无结果才）retrieve | 高德酒店 POI（仅名称/区域/地址）；RAG 仅兜底 |
 | INT-05 美食推荐 | 杭州有什么好吃的 | destination | retrieve → tools | 知识库（菜品/小吃）+ 高德餐饮 POI（餐厅名称） |
 | INT-06 天气查询 | 明天长沙天气怎样 | destination, date | tools | Open-Meteo |
 | INT-07 闲聊与兜底 | 你好；谢谢 | 无 | chat | 大模型（无则固定话术） |
@@ -50,28 +50,34 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 两条边界（PRD 第 6.4 节）已在编排表里落实：
 
 1. 天气、票价、余票只走工具：写死 `INTENT_NEEDS_RETRIEVAL=False`，不可能拿知识库内容顶替；
-2. 景点、美食、贴士只走知识库：不靠模型记忆补全。
+2. 景点、美食、行程等事实知识与实时工具按意图组合；没有证据时不靠模型记忆补全；
+3. 酒店优先用高德，只有工具没有结果时才回退 RAG，避免为已经被工具覆盖的问题白等检索。
 
 ## 八个节点（PRD 第 4.1 节）
 
 | 节点 | 做什么 | 失败策略 |
 |---|---|---|
 | `normalize_input` | 取本轮问题、归一化，并清空上一轮临时字段 | 空输入直接提示 |
-| `classify_and_extract` | 意图 + 槽位（一次 LLM 调用，Pydantic 校验） | 失败降级为规则式，不阻断 |
+| `classify_and_extract` | 意图 + 槽位；高置信 Jev + 完整规则槽位时跳过主 LLM | 失败降级为规则式，不阻断 |
 | `route` | 条件边：ask / chat / retrieve / tools | 未知意图进兜底 |
 | `retrieve` | 混合检索知识库 | RAG 不可用则降级为"无证据"，不崩 |
-| `call_tools` | 按意图调工具，结果转成同构证据 | 超时/熔断/无凭据 → unavailable |
+| `call_tools` | 同一意图下工具并行；高德共享地理编码缓存与 QPS 限速 | 超时/熔断/无凭据 → unavailable |
 | `validate_plan` | 冲突检查（缺天数、预算过低、天气非工具来源） | 只报可核实的冲突 |
 | `compose` | 逐句绑定 `[source_id]` 作答 | 生成失败 → 抽取式兜底 |
 | `persist` | 轨迹落盘（JSONL） | 落盘失败不影响本轮答案 |
 
-分支节点：`ask_clarify`（缺槽追问）、`chat`（闲聊兜底）。
+分支节点：`ask_clarify`（缺槽追问）、`chat`（闲聊兜底）、`explain`（解释上一轮推荐依据）、
+`retrieve_hotel_fallback`（酒店工具无结果时回退知识库）。
+
+解释追问不会重新跑 Jev、LLM、RAG 或工具。`persist` 会把上一轮问题的意图、槽位、引用和工具结果
+存进 `last_turn`；用户随后问“为什么选这些酒店/依据是什么”时，直接进入 `explain` 节点解释筛选
+范围、排序方式与数据局限，连续追问也不会覆盖最初的推荐对象。
 
 ## 状态字段
 
 `thread_id` / `messages`（追加）/ `query` / `intent` / `confidence` / `slots` / `missing`
 / `evidence` / `citations` / `evidence_meta` / `tool_results` / `plan` / `answer`
-/ `degraded` / `no_evidence` / `evidence_binding_rate` / `trace`（追加）
+/ `degraded` / `no_evidence` / `evidence_binding_rate` / `follow_up` / `last_turn` / `trace`（追加）
 
 `messages` 与 `trace` 用 `operator.add` 追加；其余字段每轮覆盖
 （`normalize_input` 会主动清空上一轮的证据类字段，避免多轮用到过期证据）。
@@ -127,6 +133,7 @@ python scripts/smoke_agent_offline.py
 | `AGENT_ALLOW_RULE_FALLBACK` | `1` | 允许无密钥时的规则式降级 |
 | `OPENTRIPMAP_API_KEY` | 空 | 景点工具 |
 | `AMAP_API_KEY` | 空 | 高德 Web 服务：景点 POI、路线距离、可选天气 |
+| `AMAP_MIN_INTERVAL` | `0.36` | 高德请求最小间隔（秒），适配个人 Key 的 QPS 限制 |
 | `WEATHER_PROVIDER` | `open-meteo` | 天气数据源：`open-meteo` 或 `amap` |
 | `ORS_API_KEY` | 空 | 路线距离工具 |
 | `TRAVELPORT_CREDENTIALS` | 空 | 航班/铁路/酒店（PRD 附录 B 待确认事项） |
@@ -138,10 +145,11 @@ python scripts/smoke_agent_offline.py
 
 ## 已知边界
 
-1. 交通与住宿目前一律返回"不可用"：Travelport 正式凭据在 PRD 附录 B 里仍是待确认事项，
-   在拿到之前系统不会给出任何价格或余票数字。
-2. 景点与路线适配器在本地未做联网验证（CI 不联网），首次启用请手工确认一次。
-3. 本层还没有 HTTP 接口与前端：`app/api`（FastAPI + SSE）与 `app/ui`（Chainlit）是下一步；
-   节点里已经预留 `trace`，可直接转成 SSE 的 step 事件。
-4. 2 秒指标由首 token（TTFT）承担：本层目前用非流式 `chat` 完成组装，
-   接 SSE 时换成 `llm.chat_stream` 即可复用 RAG 层已有的 TTFT 统计。
+1. 住宿、景点、餐饮、驾车和公交换乘已接高德；Travelport 航班/铁路正式凭据仍是 PRD 附录 B
+   的待确认事项，没有凭据时不会编造票价、车次或余票。
+2. 高德公交接口可能返回跨城铁路组合，但不等于 12306 实时余票；答案中必须明确这一边界。
+3. 住宿工具只返回名称/区域/地址，没有价格、评分和房型，因此“为什么选这些酒店”只能解释
+   检索范围与顺序，不能冒充性价比排名。
+4. 任务书的 2 秒指首 token 时间（TTFT P95），不是整段答案的总耗时。本层已使用 SSE 流式输出，
+   并对 Jev 快速路由、工具并行、地理编码缓存和高德限速做了优化；仍需在真实网络环境下跑 20 次
+   并记录 P95，不能用单次总耗时代替 TTFT 指标。

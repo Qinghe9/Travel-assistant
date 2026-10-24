@@ -51,7 +51,8 @@ INTENT_NEEDS_RETRIEVAL: dict[Intent, bool] = {
     Intent.DESTINATION: True,
     Intent.ITINERARY: True,
     Intent.TRANSPORT: False,
-    Intent.HOTEL: True,
+    # 住宿优先走实时高德 POI；只有工具无结果时，图里的 fallback 才检索知识库。
+    Intent.HOTEL: False,
     Intent.FOOD: True,
     Intent.WEATHER: False,
     Intent.CHITCHAT: False,

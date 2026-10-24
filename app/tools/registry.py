@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from app.agent.intents import INTENT_TOOLS
 from app.models.schemas import Intent, ToolResult, ToolStatus
@@ -121,21 +122,37 @@ def _kwargs_for(provider, slots: dict) -> dict:
     return out
 
 
-def run_for_intent(intent: Intent, slots: dict) -> list:
-    """按意图表依次调用工具，返回 ToolResult 列表（失败的也返回，便于审计）。"""
-    results = []
-    for tool_name in INTENT_TOOLS.get(intent, ()):
-        missing = [k for k in TOOL_REQUIREMENTS.get(tool_name, ()) if not (slots or {}).get(k)]
-        if missing:
-            continue
+def _run_one(tool_name: str, slots: dict) -> ToolResult:
+    """执行一个工具。在线程池里兜住异常，避免一个工具拖垮整轮。"""
+    try:
         provider = get_provider(tool_name)
         if provider is None:
-            results.append(ToolResult(provider=tool_name, status=ToolStatus.UNAVAILABLE,
-                                      message="未注册的工具：%s" % tool_name,
-                                      error_code="not_registered"))
-            continue
-        results.append(provider.run(**_kwargs_for(provider, slots)))
-    return results
+            return ToolResult(provider=tool_name, status=ToolStatus.UNAVAILABLE,
+                              message="未注册的工具：%s" % tool_name,
+                              error_code="not_registered")
+        return provider.run(**_kwargs_for(provider, slots))
+    except Exception as exc:
+        return ToolResult(provider=tool_name, status=ToolStatus.UNAVAILABLE,
+                          message="工具调度失败：%s: %s" % (type(exc).__name__, str(exc)[:120]),
+                          error_code="dispatch_error")
+
+
+def run_for_intent(intent: Intent, slots: dict) -> list:
+    """并行调用同一意图下的工具，按原注册顺序返回结果。
+
+    天气、景点、路线等工具互不依赖。串行等待会把各接口延迟相加；
+    并行后总耗时接近最慢的那个工具，同时仍保留每个工具的失败信息供审计。
+    """
+    names = []
+    for tool_name in INTENT_TOOLS.get(intent, ()):
+        missing = [k for k in TOOL_REQUIREMENTS.get(tool_name, ()) if not (slots or {}).get(k)]
+        if not missing:
+            names.append(tool_name)
+    if not names:
+        return []
+    workers = min(4, len(names))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="travel-tool") as pool:
+        return list(pool.map(lambda name: _run_one(name, slots), names))
 
 
 def tool_source_id(provider: str, fetched_at: str) -> str:

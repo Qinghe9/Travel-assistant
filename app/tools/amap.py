@@ -13,10 +13,19 @@ Key 只从环境变量 AMAP_API_KEY 读取，绝不写进代码或仓库。
 from __future__ import annotations
 
 import os
+import threading
+import time
 
 from app.tools.base import Provider, make_ok, make_unavailable
 
 BASE = "https://restapi.amap.com/v3"
+_GEO_CACHE = {}
+_GEO_LOCK = threading.RLock()
+_GEO_INFLIGHT = {}
+_GEO_TTL_SECONDS = 86400
+_AMAP_RATE_LOCK = threading.Lock()
+_AMAP_LAST_CALL = [0.0]
+_AMAP_MIN_INTERVAL = float(os.environ.get("AMAP_MIN_INTERVAL", "0.36"))
 
 
 class AmapError(RuntimeError):
@@ -38,6 +47,14 @@ def _get(path: str, params: dict, timeout: float = 4.0) -> dict:
         raise RuntimeError("缺少 httpx 依赖：pip install httpx") from exc
     if not api_key():
         raise AmapError("未配置 AMAP_API_KEY", "no_key")
+    # 个人 Key 通常只有约 3 次/秒额度。工具并行时统一错开请求起点，
+    # 既保留并行等待收益，又避免 CUQPS_HAS_EXCEEDED_THE_LIMIT。
+    with _AMAP_RATE_LOCK:
+        now = time.monotonic()
+        wait = _AMAP_MIN_INTERVAL - (now - _AMAP_LAST_CALL[0])
+        if wait > 0:
+            time.sleep(wait)
+        _AMAP_LAST_CALL[0] = time.monotonic()
     query = dict(params or {})
     query["key"] = api_key()
     resp = httpx.get(BASE + path, params=query, timeout=timeout)
@@ -49,20 +66,53 @@ def _get(path: str, params: dict, timeout: float = 4.0) -> dict:
 
 def geocode(address: str, city: str = None) -> dict:
     """地名 -> {location: "lon,lat", adcode, city, formatted_address}。"""
+    cache_key = ((address or "").strip(), (city or "").strip())
+    now = time.time()
+    owner = False
+    with _GEO_LOCK:
+        cached = _GEO_CACHE.get(cache_key)
+        if cached and cached[0] > now:
+            return dict(cached[1])
+        inflight = _GEO_INFLIGHT.get(cache_key)
+        if inflight is None:
+            inflight = [threading.Event(), None, None]
+            _GEO_INFLIGHT[cache_key] = inflight
+            owner = True
+    if not owner:
+        # 驾车、公交并行时可能同时解析“西安/北京”。只有一个线程发请求，
+        # 其他线程等到结果后直接复用，避免重复占用 QPS。
+        if not inflight[0].wait(timeout=12):
+            raise AmapError("等待地理编码超时：%s" % address, "geocode_timeout")
+        if inflight[2] is not None:
+            raise inflight[2]
+        return dict(inflight[1] or {})
+
     params = {"address": address, "output": "JSON"}
     if city:
         params["city"] = city
-    data = _get("/geocode/geo", params)
-    rows = data.get("geocodes") or []
-    if not rows:
-        raise AmapError("没有解析到地址：%s" % address, "empty_geocode")
-    row = rows[0]
-    return {
-        "location": row.get("location", ""),
-        "adcode": row.get("adcode", ""),
-        "city": row.get("city") or city or "",
-        "formatted_address": row.get("formatted_address", ""),
-    }
+    try:
+        data = _get("/geocode/geo", params)
+        rows = data.get("geocodes") or []
+        if not rows:
+            raise AmapError("没有解析到地址：%s" % address, "empty_geocode")
+        row = rows[0]
+        result = {
+            "location": row.get("location", ""),
+            "adcode": row.get("adcode", ""),
+            "city": row.get("city") or city or "",
+            "formatted_address": row.get("formatted_address", ""),
+        }
+        with _GEO_LOCK:
+            _GEO_CACHE[cache_key] = (time.time() + _GEO_TTL_SECONDS, result)
+        inflight[1] = result
+        return dict(result)
+    except Exception as exc:
+        inflight[2] = exc
+        raise
+    finally:
+        with _GEO_LOCK:
+            _GEO_INFLIGHT.pop(cache_key, None)
+        inflight[0].set()
 
 
 class AmapPOI(Provider):

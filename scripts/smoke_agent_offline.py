@@ -17,6 +17,7 @@ import sys
 import os
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -183,6 +184,10 @@ check("区间槽位写入", (s_pending.get("slots") or {}).get("days") == 3
 # 0e) Jev 决策路由：覆盖意图、写入紧急度；失败自动回退
 from app.agent import jev as jev_mod  # noqa: E402
 _real_jev_available, _real_jev_decide = jev_mod.available, jev_mod.decide
+check("Jev 紧急概率方向正确",
+      jev_mod._urgent_from_noul(0.99) is True
+      and jev_mod._urgent_from_noul(0.01) is False,
+      "")
 jev_mod.available = lambda: True
 jev_mod.decide = lambda text, timeout=None: {
     "choice": "INT-06", "confidence": 0.97,
@@ -218,6 +223,31 @@ check("Jev 低置信度不覆盖 LLM", _s_conflict.get("intent") == "INT-07",
       "%s / %s" % (_s_conflict.get("intent"), _s_conflict.get("confidence")))
 llm_mod.available, llm_mod.chat_json = _real_llm_avail, _real_llm_json
 
+# 高置信 Jev + 规则槽位完整：跳过第二次主 LLM 意图抽取
+_real_llm_stream = llm_mod.chat_stream
+_llm_json_calls = [0]
+llm_mod.available = lambda: True
+
+
+def _must_not_classify(*args, **kwargs):
+    _llm_json_calls[0] += 1
+    raise AssertionError("快速路径不应调用主 LLM 意图抽取")
+
+
+llm_mod.chat_json = _must_not_classify
+llm_mod.chat_stream = lambda *a, **k: {"text": ""}
+jev_mod.available = lambda: True
+jev_mod.decide = lambda text, timeout=None: {
+    "choice": "INT-04", "confidence": 0.96, "probabilities": {},
+    "urgent": False, "emotion": 0.1, "latency_ms": 20, "model": "stub",
+}
+_s_fast = run("广州天河区酒店")
+check("Jev+规则快速路径生效", _s_fast.get("route_source") == "jev+rule",
+      _s_fast.get("route_source"))
+check("快速路径跳过主 LLM", _llm_json_calls[0] == 0, str(_llm_json_calls[0]))
+llm_mod.chat_stream = _real_llm_stream
+llm_mod.available, llm_mod.chat_json = _real_llm_avail, _real_llm_json
+
 jev_mod.available, jev_mod.decide = _real_jev_available, _real_jev_decide
 
 # 0f) 酒店改走高德；不再走 Travelport
@@ -235,6 +265,7 @@ tool_registry.get_provider = lambda name: _StubProvider()
 _s_hotel = run("广州天河区附近有什么住宿酒店")
 check("酒店意图走工具", _s_hotel.get("intent") == "INT-04" and "call_tools" in nodes_of(_s_hotel),
       str(_s_hotel.get("intent")))
+check("酒店工具成功时跳过 RAG", "retrieve" not in nodes_of(_s_hotel), str(nodes_of(_s_hotel)))
 check("酒店不再调用 travelport", "travelport" not in str(_s_hotel.get("tool_results")),
       str(_s_hotel.get("tool_results"))[:80])
 
@@ -403,13 +434,122 @@ class _DownProvider:
                           message="模拟服务不可用", error_code="stub_down")
 
 
-def with_provider(stub, text):
+def with_provider(stub, text, thread=None):
     real = tool_registry.get_provider
     tool_registry.get_provider = lambda name: stub
     try:
-        return run(text)
+        return run(text, thread)
     finally:
         tool_registry.get_provider = real
+
+
+class _HotelProvider:
+    name = "amap_poi_hotel_search"
+
+    def __init__(self):
+        self.calls = 0
+
+    def fetch(self, city=None, area=None, keyword=None):
+        return None
+
+    def run(self, **kwargs):
+        self.calls += 1
+        return ToolResult(provider=self.name, status=ToolStatus.OK,
+                          data={"城市": kwargs.get("city") or "广州",
+                                "区域": kwargs.get("area") or "天河区",
+                                "酒店": ["测试酒店甲（天河区，体育西路）",
+                                         "测试酒店乙（天河区，珠江新城）"],
+                                "数据来源": "高德地图"},
+                          message="获取成功（仅名称，无价格/房型）")
+
+
+# 解释追问：复用上一轮酒店证据，不能再次调用工具或复读列表
+_hotel_stub = _HotelProvider()
+_thread_explain = "explain-hotel-" + uuid.uuid4().hex[:6]
+_s_explain_base = with_provider(_hotel_stub, "广州天河区有什么住宿", _thread_explain)
+_s_why = with_provider(_hotel_stub, "为什么选这些酒店？", _thread_explain)
+check("解释追问被识别", _s_why.get("follow_up") == "explain", _s_why.get("follow_up"))
+check("解释追问进入 explain 节点", "explain" in nodes_of(_s_why), str(nodes_of(_s_why)))
+check("解释追问不重跑工具", not (_s_why.get("tool_results") or [])
+      and _hotel_stub.calls == 1,
+      "tool_results=%s calls=%s" % (len(_s_why.get("tool_results") or []),
+                                     _hotel_stub.calls))
+check("解释说明检索范围与局限",
+      all(word in (_s_why.get("answer") or "") for word in ("8 公里", "评分", "预算")),
+      (_s_why.get("answer") or "")[:100])
+check("解释保留上一轮引用",
+      bool(_s_why.get("citations")) and _s_why.get("evidence_binding_rate") == 1.0,
+      str(_s_why.get("citations"))[:100])
+check("解释不覆盖原始推荐对象",
+      (_s_why.get("last_turn") or {}).get("query") == "广州天河区有什么住宿",
+      str((_s_why.get("last_turn") or {}).get("query")))
+
+
+# 工具并行：三个 120ms 的工具应在一个波次完成，而不是串成 360ms
+class _SleepProvider:
+    name = "sleep-tool"
+
+    def fetch(self):
+        return None
+
+    def run(self, **kwargs):
+        time.sleep(0.12)
+        return ToolResult(provider=self.name, status=ToolStatus.OK, message="ok")
+
+
+_real_intent_tools = tool_registry.INTENT_TOOLS
+_real_get_provider_parallel = tool_registry.get_provider
+tool_registry.INTENT_TOOLS = {_Intent.ITINERARY: ("a", "b", "c")}
+tool_registry.get_provider = lambda name: _SleepProvider()
+_t0_parallel = time.perf_counter()
+_parallel_results = tool_registry.run_for_intent(_Intent.ITINERARY, {})
+_parallel_elapsed = time.perf_counter() - _t0_parallel
+tool_registry.INTENT_TOOLS = _real_intent_tools
+tool_registry.get_provider = _real_get_provider_parallel
+check("工具并行执行", len(_parallel_results) == 3 and _parallel_elapsed < 0.30,
+      "%.3fs" % _parallel_elapsed)
+
+
+# 高德同一地点的并发地理编码只应发出一次请求
+from app.tools import amap as amap_mod  # noqa: E402
+_real_amap_get, _real_amap_key = amap_mod._get, amap_mod.api_key
+_geo_calls = [0]
+_geo_count_lock = threading.Lock()
+
+
+def _fake_geocode_get(path, params, timeout=4.0):
+    with _geo_count_lock:
+        _geo_calls[0] += 1
+    time.sleep(0.10)
+    return {"geocodes": [{"location": "108.9,34.3", "adcode": "610100",
+                          "city": "西安市", "formatted_address": "西安市"}]}
+
+
+amap_mod._get = _fake_geocode_get
+amap_mod.api_key = lambda: "test"
+amap_mod._GEO_CACHE.clear()
+amap_mod._GEO_INFLIGHT.clear()
+_geo_results, _geo_errors = [], []
+
+
+def _geo_worker():
+    try:
+        _geo_results.append(amap_mod.geocode("西安")["location"])
+    except Exception as exc:
+        _geo_errors.append(exc)
+
+
+_geo_threads = [threading.Thread(target=_geo_worker) for _ in range(3)]
+for _geo_thread in _geo_threads:
+    _geo_thread.start()
+for _geo_thread in _geo_threads:
+    _geo_thread.join()
+amap_mod._get, amap_mod.api_key = _real_amap_get, _real_amap_key
+amap_mod._GEO_CACHE.clear()
+amap_mod._GEO_INFLIGHT.clear()
+check("高德并发地理编码去重",
+      _geo_calls[0] == 1 and _geo_results == ["108.9,34.3"] * 3 and not _geo_errors,
+      "calls=%s results=%s errors=%s" % (_geo_calls[0], _geo_results, _geo_errors))
 
 
 s = with_provider(_OkProvider(), "明天北京天气怎么样")

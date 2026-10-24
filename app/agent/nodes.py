@@ -150,6 +150,31 @@ def _llm_result(payload) -> dict:
     }
 
 
+_EXPLAIN_RE = re.compile(
+    r"(为什么|为何|凭什么|依据|推荐理由|理由是什么|理由呢|怎么选|怎么挑|"
+    r"这些.{0,8}(推荐|选择|结果)|解释一下)"
+)
+
+
+def _is_explain_followup(text: str, last_turn: dict) -> bool:
+    """识别“为什么选这些/依据是什么”一类追问。
+
+    只看很短的指代式追问，并要求上一轮已经形成答案。这样既能让解释
+    直接复用上一轮证据，也不会把“为什么北京天气会降温”误当成本轮追问。
+    """
+    q = (text or "").strip()
+    if not last_turn or not last_turn.get("answer") or not q or len(q) > 32:
+        return False
+    if not _EXPLAIN_RE.search(q):
+        return False
+    previous_city = ((last_turn.get("slots") or {}).get("destination")
+                     or (last_turn.get("slots") or {}).get("target_city"))
+    named_city = slot_lib.detect_city(q)
+    if named_city and named_city != previous_city:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------- 节点
 
 def normalize_input(state):
@@ -170,6 +195,7 @@ def normalize_input(state):
         "query": text,
         "user_id": user_id,
         "profile": profile,
+        "follow_up": "",
         "evidence": [],
         "citations": [],
         "tool_results": [],
@@ -188,6 +214,29 @@ def classify_and_extract(state):
     t0 = time.perf_counter()
     text = state.get("query") or ""
     user_id = (state.get("user_id") or "demo").strip() or "demo"
+    last_turn = dict(state.get("last_turn") or {})
+
+    # 解释型追问直接复用上一轮结果：不再跑 Jev/LLM，也不重新调用实时工具。
+    if _is_explain_followup(text, last_turn):
+        prior_intent = _as_intent(last_turn.get("intent"))
+        return {
+            "intent": prior_intent.value,
+            "confidence": 1.0,
+            "slots": dict(last_turn.get("slots") or {}),
+            "missing": [],
+            "pending_intent": "",
+            "pending_missing": [],
+            "follow_up": "explain",
+            "route_source": "followup",
+            "trace": [trace_event(
+                "classify_and_extract", _elapsed_ms(t0),
+                detail="解释上一轮推荐依据（复用结果，不重跑工具）",
+                source="followup", confidence=1.0,
+                slots=dict(last_turn.get("slots") or {}), missing=[],
+                note="follow_up=explain",
+            )],
+        }
+
     previous = dict(state.get("slots") or {})
     stamp = state.get("date_updated_at") or ""
     expired = False
@@ -197,6 +246,7 @@ def classify_and_extract(state):
         stamp = ""
         expired = True
     history = _history_text(state)
+    rule_result = _rule_result(text)
 
     # JevK5：先用结构化决策做意图路由（只判断，不生成文本）
     jev_result = None
@@ -208,20 +258,50 @@ def classify_and_extract(state):
             jev_note = "Jev 决策失败，回退主链路：%s" % str(exc)[:120]
 
     result, source, note = None, "rule", ""
-    if llm.available():
-        payload, err = llm.chat_json(prompts.classify_messages(history, text), LLMIntentPayload)
-        if payload is not None:
-            result, source = _llm_result(payload), "llm"
-        else:
-            note = "大模型识别失败，已降级为规则式：%s" % err
-    else:
-        note = "未配置对话模型密钥，使用规则式识别"
-    if result is None:
-        result = _rule_result(text)
-
+    fast_path = False
     jev_intent = jev.confident_intent(jev_result) if jev_result else None
-    if jev_intent is not None:
-        trust = float(jev_result.get("confidence") or 0.0)
+    trust = float((jev_result or {}).get("confidence") or 0.0)
+    pending = state.get("pending_intent") or ""
+    slot_only_reply = bool(
+        pending and len(text) <= 24
+        and (slot_lib.parse_date_range(text) or slot_lib.parse_date(text)
+             or slot_lib.parse_days(text) or slot_lib.detect_city(text))
+        and rule_result["intent"] is Intent.CHITCHAT
+    )
+    if slot_only_reply:
+        jev_intent = _as_intent(pending)
+        trust = 1.0
+
+    # 快速路径：Jev 有足够把握，而且规则槽位已经满足必填项时，跳过主 LLM
+    # 的第二次意图抽取。对“明天西安到北京怎么走”这类边界清楚的问题通常省 1~2 秒。
+    if jev_intent is not None and trust >= cfg.JEV_TRUST_CONFIDENCE:
+        candidate = slot_lib.merge_slots(
+            previous, rule_result["slots"],
+            new_city=rule_result["slots"].get("destination"),
+        )
+        if not missing_slots(jev_intent, candidate, text):
+            result = {
+                "intent": jev_intent,
+                "confidence": trust,
+                "slots": rule_result["slots"],
+            }
+            source = "jev+rule"
+            fast_path = True
+            note = "Jev 高置信路由 %.2f；规则槽位完整，跳过主 LLM" % trust
+
+    if result is None:
+        if llm.available():
+            payload, err = llm.chat_json(prompts.classify_messages(history, text), LLMIntentPayload)
+            if payload is not None:
+                result, source = _llm_result(payload), "llm"
+            else:
+                note = "大模型识别失败，已降级为规则式：%s" % err
+        else:
+            note = "未配置对话模型密钥，使用规则式识别"
+        if result is None:
+            result = rule_result
+
+    if not fast_path and jev_intent is not None:
         agree = result["intent"] is jev_intent
         # 高置信度、或与主 LLM 一致、或主链路只是规则式时，采纳 Jev；
         # 低置信度且与主 LLM 冲突时保留主 LLM，避免 0.55~0.75 的误路由。
@@ -236,15 +316,9 @@ def classify_and_extract(state):
 
     # 追问后的补充回答：沿用上一轮待补槽位的意图。
     # 只在“很短 + 明确像槽位”时生效，避免把随后的“你好”误当成答案。
-    pending = state.get("pending_intent") or ""
-    if pending and len(text) <= 24:
-        has_slot_signal = bool(
-            slot_lib.parse_date_range(text) or slot_lib.parse_date(text)
-            or slot_lib.parse_days(text) or slot_lib.detect_city(text)
-        )
-        if has_slot_signal and slot_lib.rule_intent(text) is Intent.CHITCHAT:
-            result["intent"] = _as_intent(pending)
-            note = (note + "；" if note else "") + "沿用上一轮待补槽位的意图"
+    if slot_only_reply:
+        result["intent"] = _as_intent(pending)
+        note = (note + "；" if note else "") + "沿用上一轮待补槽位的意图"
 
     intent = result["intent"]
     incoming = result["slots"] or {}
@@ -298,6 +372,7 @@ def classify_and_extract(state):
         "date_updated_at": stamp,
         "profile": profile,
         "route_source": source,
+        "follow_up": "",
         "urgent": urgent,
         "emotion": emotion,
         "trace": [trace_event("classify_and_extract", _elapsed_ms(t0),
@@ -314,6 +389,8 @@ def classify_and_extract(state):
 
 def route(state) -> str:
     """条件边：返回 ask / chat / retrieve / tools。"""
+    if state.get("follow_up") == "explain":
+        return "explain"
     target = route_target(_as_intent(state.get("intent")), state.get("missing") or [])
     # 「智能搜索」关闭时跳过知识库，只保留工具类能力
     if target == "retrieve" and not state.get("smart_search", True):
@@ -350,6 +427,93 @@ def chat(state):
         answer = ("你好，我是旅游规划助手。你可以问我：某个城市有什么好玩的、帮我规划几天行程、"
                   "怎么去某地、住哪里、有什么好吃的，以及某天的天气。")
     return {"answer": answer, "trace": [trace_event("chat", _elapsed_ms(t0), detail=note or "ok")]}
+
+
+def _explain_citation(last_turn: dict) -> str:
+    """复用上一轮引用编号，解释时不再生成第二套来源。"""
+    citations = last_turn.get("citations") or []
+    preferred = next((c for c in citations if c.get("kind") == "tool"), None)
+    chosen = preferred or (citations[0] if citations else None)
+    index = (chosen or {}).get("index")
+    return " [%s]" % index if index else ""
+
+
+def _hotel_facts(last_turn: dict) -> list:
+    """从上一轮工具结果提取酒店名，供“为什么”节点解释，不访问网络。"""
+    names = []
+    for result in last_turn.get("tool_results") or []:
+        data = result.get("data") or {}
+        for value in data.get("酒店") or []:
+            text = str(value)
+            name = text.split("（", 1)[0].strip()
+            if name:
+                names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def explain(state):
+    """解释上一轮推荐的筛选方式与局限，不重跑 RAG/工具，也不复读列表。"""
+    t0 = time.perf_counter()
+    last_turn = dict(state.get("last_turn") or {})
+    prior_intent = _as_intent(last_turn.get("intent"))
+    slots = dict(last_turn.get("slots") or {})
+    mark = _explain_citation(last_turn)
+
+    if prior_intent is Intent.HOTEL:
+        city = slots.get("destination") or slots.get("target_city") or "上一轮城市"
+        center = slots.get("area") or city
+        hotels = _hotel_facts(last_turn)
+        lead = ("这些酒店不是按评分、性价比或好评率筛出的“最佳酒店”，"
+                "而是上一轮按高德住宿 POI 返回结果整理的候选名单。%s" % mark)
+        if hotels:
+            detail = ("上一轮没有收到明确的商圈、预算或住宿偏好，因此以“%s”为中心，"
+                      "在约 8 公里范围内查找“住宿服务”类型，并按接口返回顺序列出最多 8 条。"
+                      "结果集中在同一片区域，主要就是这个检索范围造成的。%s"
+                      % (center, mark))
+        else:
+            detail = ("上一轮查询以“%s”为中心查找住宿服务，并按接口返回顺序列出结果；"
+                      "它没有经过二次评分排序。%s" % (center, mark))
+        limit = ("高德这次只返回名称、区域和地址，没有返回价格、评分、房型，"
+                 "也没有返回走到景点或地铁站的时间，所以系统不能声称哪一家更划算、"
+                 "更方便或更安静。")
+        advice = ("如果你希望我真正比较，请补充预算、目标商圈或地铁站，"
+                  "以及“靠近景点、安静、亲子、可取消”等偏好；下一轮才能按条件重新筛选。")
+        answer = "\n".join((lead, detail, limit, advice))
+    elif prior_intent is Intent.FOOD:
+        answer = "\n".join((
+            "上一轮不是凭单一榜单推荐，而是把两类证据合在一起：知识库回答“吃什么”，"
+            "高德补充附近餐厅名称。%s" % mark,
+            "高德工具未返回评分、人均价格和营业状态，所以餐厅出现的先后不等于口味排名；"
+            "知识库中的菜品介绍也不能证明某家店一定做得最好。",
+            "若要按口味、预算、距离或营业中筛选，需要再提供商圈和人均预算。",
+        ))
+    elif prior_intent is Intent.ITINERARY:
+        answer = "\n".join((
+            "上一轮是按目的地、天数和偏好组织行程，再用知识库补充景点信息、"
+            "用实时工具补充天气/位置等数据。%s" % mark,
+            "它不是穷举所有路线后的数学最优解；证据不足、天气限制或工具不可用时，"
+            "系统只能给出保守安排。",
+            "如果要比较两套方案，请告诉我每天想去的重点、预算和体力强度。",
+        ))
+    else:
+        answer = (
+            "上一轮回答只依据当时返回的知识库与工具证据，并按引用编号逐句绑定。%s "
+            "系统没有读取隐藏的用户画像，也不会用常识补造价格、评分或营业时间；"
+            "证据没覆盖的部分无法给出确定结论。" % mark
+        )
+
+    return {
+        "answer": answer,
+        "citations": list(last_turn.get("citations") or []),
+        "plan": {"ok": True, "issues": [], "follow_up": "explain",
+                 "based_on_trace_id": last_turn.get("trace_id", "")},
+        "no_evidence": False,
+        "degraded": False,
+        "evidence_binding_rate": 1.0,
+        "trace": [trace_event("explain", _elapsed_ms(t0),
+                              detail="复用上一轮证据解释推荐依据，未重跑工具",
+                              based_on_trace_id=last_turn.get("trace_id", ""))],
+    }
 
 
 def retrieve(state):
@@ -408,6 +572,28 @@ def call_tools(state):
                               providers=[item.provider for item in results],
                               unavailable=notes)],
     }
+
+
+def after_tools(state) -> str:
+    """酒店工具成功时直接校验；没有结果才回退知识库，避免无条件等待 RAG。"""
+    if _as_intent(state.get("intent")) is Intent.HOTEL:
+        ok_tools = [item for item in (state.get("tool_results") or [])
+                    if item.get("status") == _INT_TOOL_OK]
+        if not ok_tools:
+            return "retrieve"
+    return "validate"
+
+
+def retrieve_hotel_fallback(state):
+    """酒店实时工具无结果时，复用通用 RAG 检索作为兜底。"""
+    result = retrieve(state)
+    events = []
+    for event in result.get("trace") or []:
+        item = dict(event)
+        item["detail"] = "酒店工具无结果，回退知识库；" + (item.get("detail") or "")
+        events.append(item)
+    result["trace"] = events
+    return result
 
 
 def validate_plan(state):
@@ -619,6 +805,21 @@ def compose(state):
 def persist(state):
     """落盘审计轨迹（PRD 可追溯）。失败只告警，不影响本轮答案。"""
     t0 = time.perf_counter()
+    previous_turn = dict(state.get("last_turn") or {})
+    if state.get("follow_up") == "explain":
+        # 连续追问时仍指向最初那轮推荐，不能把“为什么”本身覆盖成解释对象。
+        last_turn = previous_turn
+    else:
+        last_turn = {
+            "trace_id": state.get("trace_id", ""),
+            "query": state.get("query", ""),
+            "intent": state.get("intent", ""),
+            "slots": dict(state.get("slots") or {}),
+            "answer": state.get("answer", ""),
+            "citations": list(state.get("citations") or []),
+            "tool_results": list(state.get("tool_results") or []),
+            "plan": dict(state.get("plan") or {}),
+        }
     note = "轨迹落盘已关闭"
     if cfg.TRACE_ENABLED:
         record = {
@@ -642,4 +843,7 @@ def persist(state):
             note = "轨迹已写入"
         except Exception as exc:
             note = "轨迹落盘失败（不影响本轮答案）：%s" % exc
-    return {"trace": [trace_event("persist", _elapsed_ms(t0), detail=note)]}
+    return {
+        "last_turn": last_turn,
+        "trace": [trace_event("persist", _elapsed_ms(t0), detail=note)],
+    }

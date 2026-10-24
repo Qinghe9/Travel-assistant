@@ -86,6 +86,11 @@ def _cache_key(text: str) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
+def _urgent_from_noul(value):
+    """Jev 的 noul 是“布尔判断为 true 的概率”，不是反向概率。"""
+    return None if value is None else (float(value) >= 0.5)
+
+
 def decide(text: str, timeout: float = None) -> dict:
     """调用 Jev 做结构化判断；任何失败抛 JevError。"""
     if not available():
@@ -124,7 +129,7 @@ def decide(text: str, timeout: float = None) -> dict:
     emotion_answer = answers.get("frustration") or {}
 
     noul = urgent_answer.get("noul")
-    urgent = None if noul is None else (float(noul) < 0.5)
+    urgent = _urgent_from_noul(noul)
     emotion = emotion_answer.get("score")
 
     result = {

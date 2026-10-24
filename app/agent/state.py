@@ -33,6 +33,8 @@ class AgentState(TypedDict, total=False):
     date_updated_at: str
     profile: dict
     route_source: str
+    follow_up: str
+    last_turn: dict
     urgent: bool
     emotion: float
 
