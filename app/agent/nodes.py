@@ -31,7 +31,14 @@ from app.agent.store import (
     profile_hint,
     save_profile,
 )
-from app.models.schemas import Intent, LLMIntentPayload, ToolStatus, dump, now_iso
+from app.models.schemas import (
+    Intent,
+    LLMIntentPayload,
+    LLMQueryPlanPayload,
+    ToolStatus,
+    dump,
+    now_iso,
+)
 from app.tools import registry
 
 NO_EVIDENCE_ANSWER = "知识库中没有找到与这个问题相关的依据，无法作答。"
@@ -182,8 +189,58 @@ def _is_explain_followup(text: str, last_turn: dict) -> bool:
     return True
 
 
+def _build_tasks_from_specs(candidates: list, previous: dict, profile: dict) -> tuple:
+    """把 (intent, query, slots) 规划项整理成可执行任务，并补齐共享槽位。"""
+    aggregate = dict(previous or {})
+    for _intent, _part, slots in candidates:
+        aggregate = slot_lib.merge_slots(aggregate, slots, new_city=slots.get("destination"))
+    shared_city = (aggregate.get("target_city") or aggregate.get("destination")
+                   or (profile or {}).get("destination"))
+    if shared_city and not aggregate.get("destination"):
+        aggregate["destination"] = shared_city
+    transport_tasks = [item for item in candidates if item[0] is Intent.TRANSPORT]
+    if transport_tasks and shared_city:
+        aggregate["target_city"] = shared_city
+        aggregate["destination_place"] = shared_city
+    if aggregate.get("start_city") and not aggregate.get("origin"):
+        aggregate["origin"] = aggregate["start_city"]
+    if aggregate.get("origin") and not aggregate.get("start_city"):
+        known_city = slot_lib.detect_city(aggregate["origin"])
+        if known_city:
+            aggregate["start_city"] = known_city
+
+    tasks = []
+    intent_categories = {
+        Intent.DESTINATION: "attraction",
+        Intent.FOOD: "food",
+        Intent.HOTEL: "hotel",
+        Intent.TRANSPORT: "transport",
+    }
+    for intent, part, slots in candidates:
+        shared_base = dict(aggregate)
+        shared_base.pop("category", None)
+        shared_base.pop("entity", None)
+        task_slots = slot_lib.merge_slots(shared_base, slots, new_city=slots.get("destination"))
+        if intent_categories.get(intent):
+            task_slots["category"] = intent_categories[intent]
+        if shared_city and not task_slots.get("destination"):
+            task_slots["destination"] = shared_city
+        if intent is Intent.TRANSPORT and shared_city:
+            task_slots["target_city"] = task_slots.get("target_city") or shared_city
+            task_slots["destination_place"] = task_slots.get("destination_place") or shared_city
+        if intent is Intent.TRANSPORT and task_slots.get("start_city") and not task_slots.get("origin"):
+            task_slots["origin"] = task_slots["start_city"]
+        tasks.append({
+            "query": part,
+            "intent": intent.value,
+            "slots": task_slots,
+            "missing": missing_slots(intent, task_slots, part),
+        })
+    return tasks, aggregate
+
+
 def _multi_intent_tasks(text: str, previous: dict, profile: dict) -> tuple:
-    """拆分“交通？住宿？”这类复合请求，并为每个意图保留独立任务。"""
+    """规则兜底：拆分“交通？住宿？”这类复合请求。"""
     parts = slot_lib.split_subqueries(text)
     if len(parts) < 2:
         return [], {}
@@ -197,27 +254,55 @@ def _multi_intent_tasks(text: str, previous: dict, profile: dict) -> tuple:
         candidates.append((intent, part, slot_lib.rule_extract(part)))
     if len(candidates) < 2:
         return [], {}
+    return _build_tasks_from_specs(candidates, previous, profile)
 
-    aggregate = dict(previous or {})
-    for _intent, _part, slots in candidates:
-        aggregate = slot_lib.merge_slots(aggregate, slots, new_city=slots.get("destination"))
-    shared_city = (aggregate.get("target_city") or aggregate.get("destination")
-                   or (profile or {}).get("destination"))
-    if shared_city and not aggregate.get("destination"):
-        aggregate["destination"] = shared_city
 
-    tasks = []
-    for intent, part, slots in candidates:
-        task_slots = slot_lib.merge_slots(aggregate, slots, new_city=slots.get("destination"))
-        if shared_city and not task_slots.get("destination"):
-            task_slots["destination"] = shared_city
-        tasks.append({
-            "query": part,
-            "intent": intent.value,
-            "slots": task_slots,
-            "missing": missing_slots(intent, task_slots, part),
-        })
-    return tasks, aggregate
+_COMPLEX_INTENT_MARKERS = {
+    Intent.TRANSPORT: ("怎么去", "怎么走", "怎么从", "出发", "高铁", "火车", "飞机", "地铁", "公交"),
+    Intent.WEATHER: ("天气", "气温", "下雨", "冷不冷", "热不热"),
+    Intent.HOTEL: ("酒店", "住宿", "住哪", "住哪里", "哪里住", "宾馆"),
+    Intent.FOOD: ("美食", "吃", "餐厅", "小吃", "火锅"),
+    Intent.ITINERARY: ("规划", "行程", "安排几天", "几天游"),
+    Intent.DESTINATION: ("景点", "好玩", "玩", "必去", "旅游", "旅行"),
+}
+
+
+def _looks_complex_query(text: str) -> bool:
+    """判断是否需要让 LLM 做结构化多任务规划，而不是单意图快速路由。"""
+    parts = slot_lib.split_subqueries(text)
+    if len(parts) > 1:
+        return True
+    matched = 0
+    for words in _COMPLEX_INTENT_MARKERS.values():
+        if any(word in (text or "") for word in words):
+            matched += 1
+    return matched >= 2
+
+
+def _llm_query_plan_tasks(payload, text: str, previous: dict, profile: dict) -> tuple:
+    """把语言模型返回的结构化任务收敛成内部任务。"""
+    if payload is None:
+        return [], {}
+    explicit_itinerary = any(
+        word in (text or "") for word in ("规划", "行程", "安排", "几天", "日游", "路线")
+    )
+    candidates = []
+    for raw in payload.tasks or []:
+        try:
+            intent = Intent(raw.intent)
+        except Exception:
+            continue
+        if intent is Intent.CHITCHAT:
+            continue
+        part = slot_lib.normalize_text(raw.query or text)
+        slots = _clean_slots(raw.slots or {})
+        if intent is Intent.ITINERARY and not slots.get("days") and not explicit_itinerary:
+            # 保护：用户只说“想去北京玩”时，不能自动升级成需要天数的行程规划。
+            intent = Intent.DESTINATION
+        candidates.append((intent, part, slots))
+    if not candidates:
+        return [], {}
+    return _build_tasks_from_specs(candidates, previous, profile)
 
 
 def _intents_of(state) -> list:
@@ -233,16 +318,21 @@ def _intents_of(state) -> list:
     return out or [_as_intent(state.get("intent"))]
 
 
-_MEMORY_QUERY_RE = re.compile(r"(之前|以前|上次|历史|记录|记得|知道).{0,16}(去哪|哪里|目的地|想玩|旅行|对话)?")
+def _is_memory_recall_query(text: str) -> bool:
+    asks_history = (
+        any(w in text for w in ("之前", "以前", "上次", "历史记录", "历史对话",
+                                "对话记录", "聊天记录", "保存的记录"))
+        and any(w in text for w in ("记得", "知道", "去哪", "哪里", "目的地",
+                                    "搜索", "查找", "查一下", "对话"))
+    )
+    asks_destination = (("想去哪" in text or "目的地" in text)
+                        and ("记得" in text or "知道" in text))
+    return bool(asks_history or asks_destination)
 
 
 def _memory_recall_answer(user_id: str, profile: dict, text: str) -> str:
     """回答“你还记得我想去哪吗”；只读跨会话记忆，不访问工具/RAG。"""
-    asks_history = (_MEMORY_QUERY_RE.search(text or "")
-                    and any(w in text for w in ("之前", "以前", "上次", "历史", "记录", "记得")))
-    asks_destination = (("想去哪" in text or "目的地" in text)
-                        and ("记得" in text or "知道" in text))
-    if not (asks_history or asks_destination):
+    if not _is_memory_recall_query(text):
         return ""
     history = load_history(user_id)
     destinations = []
@@ -287,6 +377,7 @@ def normalize_input(state):
         detail += "｜长期偏好：" + "、".join(profile["preferences"][:4])
     return {
         "query": text,
+        "normalized_query": "",
         "user_id": user_id,
         "profile": profile,
         "follow_up": "",
@@ -310,6 +401,30 @@ def classify_and_extract(state):
     user_id = (state.get("user_id") or "demo").strip() or "demo"
     last_turn = dict(state.get("last_turn") or {})
 
+    # 记忆回忆是元问题，不能套用普通旅行意图规则。
+    if _is_memory_recall_query(text):
+        profile_now = dict(state.get("profile") or {}) or load_profile(user_id)
+        destination = profile_now.get("destination")
+        slots_out = {"destination": destination} if destination else {}
+        return {
+            "intent": Intent.CHITCHAT.value,
+            "intents": [Intent.CHITCHAT.value],
+            "tasks": [],
+            "confidence": 1.0,
+            "slots": slots_out,
+            "missing": [],
+            "pending_intent": "",
+            "pending_missing": [],
+            "follow_up": "",
+            "route_source": "memory",
+            "normalized_query": text,
+            "trace": [trace_event(
+                "classify_and_extract", _elapsed_ms(t0),
+                detail="识别为跨会话记忆回忆", source="memory",
+                confidence=1.0, slots=slots_out, missing=[],
+            )],
+        }
+
     # 解释型追问直接复用上一轮结果：不再跑 Jev/LLM，也不重新调用实时工具。
     if _is_explain_followup(text, last_turn):
         prior_intent = _as_intent(last_turn.get("intent"))
@@ -322,6 +437,7 @@ def classify_and_extract(state):
             "pending_missing": [],
             "follow_up": "explain",
             "route_source": "followup",
+            "normalized_query": text,
             "trace": [trace_event(
                 "classify_and_extract", _elapsed_ms(t0),
                 detail="解释上一轮推荐依据（复用结果，不重跑工具）",
@@ -342,12 +458,43 @@ def classify_and_extract(state):
     history = _history_text(state)
     rule_result = _rule_result(text)
     profile = dict(state.get("profile") or {}) or load_profile(user_id)
-    multi_tasks, multi_slots = _multi_intent_tasks(text, previous, profile)
+    multi_tasks, multi_slots = [], {}
+    normalized_query = text
+    plan_used = False
+    plan_note = ""
+
+    # 复杂、口语化或碎片化表达优先交给 LLM 生成结构化任务计划。
+    # LLM 只做“理解与改写”，最终意图/槽位仍由白名单清洗和必填槽位校验。
+    if _looks_complex_query(text) and llm.available():
+        try:
+            memory_text = memory_hint(user_id, profile, text)
+            plan_payload, plan_err = llm.chat_json(
+                prompts.query_plan_messages(history, memory_text, text),
+                LLMQueryPlanPayload,
+                max_tokens=max(cfg.CLASSIFY_MAX_TOKENS, 700),
+            )
+            if plan_payload is not None:
+                planned_tasks, planned_slots = _llm_query_plan_tasks(
+                    plan_payload, text, previous, profile)
+                if planned_tasks:
+                    multi_tasks, multi_slots = planned_tasks, planned_slots
+                    normalized_query = (plan_payload.normalized_query or text).strip()
+                    plan_used = True
+                    plan_note = "LLM 结构化计划 %.2f，拆出 %d 个任务" % (
+                        float(plan_payload.confidence or 0.0), len(planned_tasks))
+            else:
+                plan_note = "LLM 计划失败，回退规则拆分：%s" % plan_err
+        except Exception as exc:
+            plan_note = "LLM 计划异常，回退规则拆分：%s" % llm.error_of(exc)
+    if not multi_tasks:
+        multi_tasks, multi_slots = _multi_intent_tasks(text, previous, profile)
 
     # JevK5：单意图时先做结构化路由；复合请求由规则拆成多个任务，
     # 不再让 Jev 只选一个意图而漏答后半句。
     jev_result = None
-    jev_note = "检测到复合请求，拆分为 %d 个任务" % len(multi_tasks) if multi_tasks else ""
+    jev_note = (plan_note if multi_tasks else "")
+    if multi_tasks and not jev_note:
+        jev_note = "检测到复合请求，拆分为 %d 个任务" % len(multi_tasks)
     if not multi_tasks and jev.available():
         try:
             jev_result = jev.decide(jev.compose_state(history, text))
@@ -360,10 +507,10 @@ def classify_and_extract(state):
         primary = _as_intent(multi_tasks[0]["intent"])
         result = {
             "intent": primary,
-            "confidence": 0.95,
+            "confidence": 0.96 if plan_used else 0.95,
             "slots": multi_slots,
         }
-        source = "rule+multi"
+        source = "llm+plan" if plan_used else "rule+multi"
         fast_path = True
         note = "、".join(task["intent"] for task in multi_tasks)
 
@@ -489,6 +636,7 @@ def classify_and_extract(state):
         "intent": intent.value,
         "intents": [task["intent"] for task in multi_tasks] if multi_tasks else [intent.value],
         "tasks": multi_tasks,
+        "normalized_query": normalized_query or text,
         "confidence": result["confidence"],
         "slots": merged,
         "missing": missing,
@@ -504,6 +652,7 @@ def classify_and_extract(state):
                               detail="%s（%s）" % (intent.value, source),
                               source=source, confidence=result["confidence"],
                               slots=merged, missing=missing, note=note,
+                              normalized_query=normalized_query or text,
                               date_cleared=expired,
                               jev_confidence=(jev_result or {}).get("confidence"),
                               jev_latency_ms=(jev_result or {}).get("latency_ms"),
@@ -656,7 +805,7 @@ def retrieve(state):
     """工具之后的 RAG 补充检索；只追加证据，不覆盖 API 结果。"""
     t0 = time.perf_counter()
     slots = state.get("slots") or {}
-    query = state.get("query") or ""
+    query = state.get("normalized_query") or state.get("query") or ""
     city = slots.get("destination") or slots.get("target_city")
     ev = retrieval.build_evidence(query, city=city, category=slots.get("category"),
                                   entity=slots.get("entity"))
@@ -853,6 +1002,7 @@ def compose(state):
     """组织答案：逐句绑定 source_id；生成失败退化为抽取式，绝不编造。"""
     t0 = time.perf_counter()
     query = state.get("query") or ""
+    normalized_query = state.get("normalized_query") or query
     evidence = state.get("evidence") or []
     citations = state.get("citations") or []
     intent = _as_intent(state.get("intent"))
@@ -894,6 +1044,9 @@ def compose(state):
             )
             if remembered:
                 hint = (hint + "\n" if hint else "") + remembered
+            if normalized_query and normalized_query != query:
+                hint = (hint + "\n" if hint else "") + (
+                    "语言理解后的完整问题：%s。回答时仍要覆盖用户原话中的全部任务。" % normalized_query)
             hint = (hint + "\n" if hint else "") + (
                 "证据按“工具/API 优先、RAG 补充”排序。实时事实以工具为准；"
                 "RAG 只补充景点、菜品、文化或一般规则，不得替代实时数值。")
@@ -910,6 +1063,11 @@ def compose(state):
                 hint = (hint + "\n" if hint else "") + (
                     "住宿任务必须优先完整列出本轮高德酒店工具返回的名称、区域和地址；"
                     "RAG 中的酒店或价格只能作为后置背景，不能替代高德本轮结果。"
+                )
+            if any(task.get("intent") == Intent.FOOD.value for task in tasks):
+                hint = (hint + "\n" if hint else "") + (
+                    "美食任务必须先用本轮高德餐饮工具返回的餐厅名称和地址回答附近吃什么，"
+                    "再用 RAG 补充菜品、小吃或饮食文化；不得跳过工具餐厅名单。"
                 )
             if state.get("thinking"):
                 hint = (hint + "\n" if hint else "") + (
@@ -931,7 +1089,7 @@ def compose(state):
                                       _evidence_block(picked, limit=len(picked), per_chars=700),
                                       query, extra_rule=hint),
                                   temperature=0.0,
-                                  max_tokens=max(cfg.LLM_MAX_TOKENS, 512) if len(tasks) > 1
+                                  max_tokens=max(cfg.LLM_MAX_TOKENS, 768) if len(tasks) > 1
                                   else cfg.LLM_MAX_TOKENS,
                                   on_token=_emit_token)
             text = res.get("text") or ""
@@ -986,6 +1144,7 @@ def persist(state):
         last_turn = {
             "trace_id": state.get("trace_id", ""),
             "query": state.get("query", ""),
+            "normalized_query": state.get("normalized_query", ""),
             "intent": state.get("intent", ""),
             "intents": list(state.get("intents") or []),
             "tasks": list(state.get("tasks") or []),
@@ -1001,6 +1160,7 @@ def persist(state):
         "trace_id": state.get("trace_id", ""),
         "thread_id": state.get("thread_id", ""),
         "query": state.get("query", ""),
+        "normalized_query": state.get("normalized_query", ""),
         "answer": state.get("answer", ""),
         "intent": state.get("intent", ""),
         "intents": list(state.get("intents") or []),
@@ -1021,6 +1181,7 @@ def persist(state):
             "thread_id": state.get("thread_id", ""),
             "user_id": user_id,
             "query": state.get("query", ""),
+            "normalized_query": state.get("normalized_query", ""),
             "intent": state.get("intent", ""),
             "slots": state.get("slots") or {},
             "missing": state.get("missing") or [],

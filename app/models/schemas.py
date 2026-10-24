@@ -106,6 +106,22 @@ class LLMIntentPayload(BaseModel):
     slots: dict = Field(default_factory=dict)
 
 
+class LLMTaskPayload(BaseModel):
+    """复杂问法拆出的单个可执行任务。"""
+
+    intent: str
+    query: str = ""
+    slots: dict = Field(default_factory=dict)
+
+
+class LLMQueryPlanPayload(BaseModel):
+    """语言模型对口语化、碎片化、多意图问题生成的结构化计划。"""
+
+    normalized_query: str = ""
+    confidence: float = 0.0
+    tasks: list[LLMTaskPayload] = Field(default_factory=list)
+
+
 class IntentResult(BaseModel):
     """意图识别与槽位抽取结果（PRD FR-01）。"""
 
@@ -170,6 +186,7 @@ class AgentReply(BaseModel):
     user_id: str = ""
     trace_id: str = ""
     query: str = ""
+    normalized_query: str = ""
     intent: str = ""
     intent_label: str = ""
     confidence: float = 0.0

@@ -22,6 +22,7 @@ class AgentState(TypedDict, total=False):
     smart_search: bool
     messages: Annotated[list, add]
     query: str
+    normalized_query: str
 
     # 理解层（PRD FR-01）
     intent: str

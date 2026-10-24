@@ -55,6 +55,7 @@ async def astream_answer(agent, inputs: dict, config: dict):
         "user_id": final_state.get("user_id", ""),
         "trace_id": trace_id,
         "query": final_state.get("query", ""),
+        "normalized_query": final_state.get("normalized_query", ""),
         "intent": final_state.get("intent", ""),
         "intents": final_state.get("intents") or [],
         "tasks": final_state.get("tasks") or [],

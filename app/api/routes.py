@@ -41,6 +41,7 @@ def _reply_from_state(state: dict, trace_id: str) -> dict:
         "thread_id": state.get("thread_id", ""),
         "user_id": state.get("user_id", ""),
         "query": state.get("query", ""),
+        "normalized_query": state.get("normalized_query", ""),
         "intent": state.get("intent", ""),
         "intents": state.get("intents") or [],
         "tasks": state.get("tasks") or [],

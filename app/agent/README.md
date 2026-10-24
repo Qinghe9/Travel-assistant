@@ -75,6 +75,11 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 复合请求会写入 `tasks`：例如“怎么从顺德去广州？应该在哪里住？”会拆成
 `INT-03 交通 + INT-04 住宿`，两类工具同时调用，生成答案时要求逐项回答，不能只答第一问。
 
+复杂、口语化、碎片化或多意图问法会优先调用 `LLMQueryPlanPayload` 结构化理解器。
+模型输出 `normalized_query + tasks[]`，每个任务带 intent、改写后问题和槽位；程序再经过
+白名单槽位清洗、跨任务城市继承和必填槽位校验。模型不可用、返回非 JSON 或低质量计划时，
+自动回退到本地复合规则。这样新增口语表达主要依靠提示词和结构校验，不需要为每个句式不断加关键词。
+
 ## 状态字段
 
 `thread_id` / `messages`（追加）/ `query` / `intent` / `intents` / `tasks` / `confidence` / `slots` / `missing`

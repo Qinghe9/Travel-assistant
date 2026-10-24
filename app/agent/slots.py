@@ -222,6 +222,13 @@ def parse_route_places(text: str):
         m = re.search(r"([\u4e00-\u9fffA-Za-z0-9]{2,12}?)\s*到\s*"
                       r"([\u4e00-\u9fffA-Za-z0-9]{2,10}?)(?=[的怎有高火动飞机地]|$)", q)
     if not m:
+        # 复合对话里常见“我想去北京，怎么从广州出发”——后半句省略终点。
+        # 这里只抽出出发地，终点由多任务共享上下文补齐。
+        m = re.search(r"从\s*([\u4e00-\u9fffA-Za-z0-9]{2,12}?)\s*"
+                      r"(?:出发|启程|动身)(?=[，,？?。]|$)", q)
+        if m:
+            return m.group(1).strip(), None
+    if not m:
         return None, None
     return m.group(1).strip(), m.group(2).strip()
 
@@ -310,6 +317,9 @@ def rule_intent(text: str) -> Intent:
     for intent, words in _INTENT_RULES:
         if any(w in q for w in words):
             return intent
+    # “我想去北京玩/去北京旅游”没有“景点/好玩”字样，但明确是目的地游玩。
+    if re.search(r"(?:去|到)[\u4e00-\u9fff]{2,8}(?:玩|旅游|旅行)", q):
+        return Intent.DESTINATION
     return Intent.CHITCHAT
 
 
@@ -349,7 +359,8 @@ def rule_extract(text: str) -> dict:
         out["start_city"] = start
     if target:
         out["target_city"] = target
-    destination = target or city
+    # 单独的“从广州出发”只表示出发地，不能把广州误当目的地。
+    destination = target or (city if not (origin_raw and not dest_raw) else None)
     if destination:
         out["destination"] = destination
     area = parse_area(text, destination)

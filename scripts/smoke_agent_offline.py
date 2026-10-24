@@ -135,6 +135,12 @@ check("相对日期解析", slot_lib.parse_date("明天北京天气") is not Non
 check("不猜测缺失日期", slot_lib.parse_date("北京天气怎么样") is None, "")
 _split = slot_lib.split_subqueries("怎么从顺德去广州？应该在哪里住？")
 check("复合问题拆分", _split == ["怎么从顺德去广州", "应该在哪里住"], str(_split))
+check("省略终点时抽取出发地",
+      slot_lib.parse_route_places("怎么从广州出发") == ("广州", None),
+      str(slot_lib.parse_route_places("怎么从广州出发")))
+check("去某地玩识别为目的地",
+      slot_lib.rule_intent("我想去北京玩").value == "INT-01",
+      slot_lib.rule_intent("我想去北京玩").value)
 
 # 0b) 日期过期策略
 import datetime as _dt  # noqa: E402
@@ -254,6 +260,68 @@ llm_mod.available, llm_mod.chat_json = _real_llm_avail, _real_llm_json
 
 jev_mod.available, jev_mod.decide = _real_jev_available, _real_jev_decide
 
+# 复杂、碎片化问法：LLM 输出结构化任务计划，规则只做兜底
+from app.models.schemas import LLMQueryPlanPayload, LLMTaskPayload  # noqa: E402
+_real_plan_json = llm_mod.chat_json
+_real_plan_stream = llm_mod.chat_stream
+_real_plan_available = llm_mod.available
+_planned = LLMQueryPlanPayload(
+    normalized_query="我想去北京玩，从广州出发，并了解北京美食和住宿",
+    confidence=0.94,
+    tasks=[
+        LLMTaskPayload(intent="INT-01", query="北京有什么好玩的",
+                       slots={"destination": "北京"}),
+        LLMTaskPayload(intent="INT-03", query="从广州到北京怎么走",
+                       slots={"destination": "北京", "origin": "广州",
+                              "start_city": "广州", "target_city": "北京",
+                              "destination_place": "北京"}),
+        LLMTaskPayload(intent="INT-05", query="北京有什么美食",
+                       slots={"destination": "北京"}),
+        LLMTaskPayload(intent="INT-04", query="北京住哪里",
+                       slots={"destination": "北京"}),
+    ],
+)
+llm_mod.available = lambda: True
+llm_mod.chat_json = lambda messages, schema, **kwargs: (_planned, "")
+llm_mod.chat_stream = lambda *args, **kwargs: {"text": ""}
+_s_plan = run("北京，广州走，顺便吃和住，都想安排")
+check("LLM 复杂问法生成结构化计划",
+      _s_plan.get("route_source") == "llm+plan"
+      and _s_plan.get("intents") == ["INT-01", "INT-03", "INT-05", "INT-04"],
+      "%s / %s" % (_s_plan.get("route_source"), _s_plan.get("intents")))
+check("LLM 计划返回完整改写问题",
+      _s_plan.get("normalized_query") == "我想去北京玩，从广州出发，并了解北京美食和住宿",
+      str(_s_plan.get("normalized_query")))
+check("LLM 计划拆出四个任务且交通槽位完整",
+      len(_s_plan.get("tasks") or []) == 4
+      and all(not (task.get("missing") or []) for task in _s_plan.get("tasks") or [])
+      and "ask_clarify" not in nodes_of(_s_plan),
+      str(_s_plan.get("tasks")))
+
+_overplanned = LLMQueryPlanPayload(
+    normalized_query="我想去北京玩，从广州出发，并了解北京美食",
+    confidence=0.95,
+    tasks=[
+        LLMTaskPayload(intent="INT-02", query="规划去北京玩的行程",
+                       slots={"destination": "北京"}),
+        LLMTaskPayload(intent="INT-03", query="从广州到北京怎么走",
+                       slots={"destination": "北京", "origin": "广州",
+                              "start_city": "广州", "target_city": "北京",
+                              "destination_place": "北京"}),
+        LLMTaskPayload(intent="INT-05", query="北京有什么美食",
+                       slots={"destination": "北京"}),
+    ],
+)
+llm_mod.chat_json = lambda messages, schema, **kwargs: (_overplanned, "")
+_s_guard = run("我想去北京玩？怎么从广州出发？有什么美食？")
+check("未明确规划时不强制追问天数",
+      _s_guard.get("intents") == ["INT-01", "INT-03", "INT-05"]
+      and "ask_clarify" not in nodes_of(_s_guard),
+      "%s / %s" % (_s_guard.get("intents"), _s_guard.get("missing")))
+llm_mod.chat_json = _real_plan_json
+llm_mod.chat_stream = _real_plan_stream
+llm_mod.available = _real_plan_available
+
 # 0f) 酒店改走高德；不再走 Travelport
 from app.agent.intents import INTENT_NEEDS_RETRIEVAL, INTENT_TOOLS  # noqa: E402
 from app.models.schemas import Intent as _Intent  # noqa: E402
@@ -290,6 +358,20 @@ check("复合请求调用多个工具",
       "call_tools" in nodes_of(_s_multi)
       and len(_s_multi.get("tool_results") or []) >= 2,
       str([item.get("provider") for item in _s_multi.get("tool_results") or []]))
+_s_omitted = run("我想去北京玩？怎么从广州出发？有什么美食？")
+check("省略终点复合请求识别三类意图",
+      _s_omitted.get("intents") == ["INT-01", "INT-03", "INT-05"],
+      str(_s_omitted.get("intents")))
+_omitted_tasks = _s_omitted.get("tasks") or []
+_omitted_transport = next((task for task in _omitted_tasks
+                           if task.get("intent") == "INT-03"), {})
+check("用第一句北京补齐交通终点",
+      (_omitted_transport.get("slots") or {}).get("origin") == "广州"
+      and (_omitted_transport.get("slots") or {}).get("destination_place") == "北京"
+      and not (_omitted_transport.get("missing") or []),
+      str(_omitted_transport))
+check("省略终点复合请求不再误追问",
+      "ask_clarify" not in nodes_of(_s_omitted), str(nodes_of(_s_omitted)))
 
 # 0g) RAG 向量缓存跨线程（修复 SqliteSaver 之外的 SQLite 报错）
 from app.rag.indexing.embed import EmbedCache  # noqa: E402
