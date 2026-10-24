@@ -44,17 +44,16 @@ INTENT_TOOLS: dict[Intent, tuple[str, ...]] = {
     Intent.CHITCHAT: (),
 }
 
-# 哪些意图需要先检索知识库。
-# 依据 PRD 第 6.4 节边界：只有工具能回答的实时问题（天气/票价/余票）
-# 不许用知识库内容替代，所以天气与交通不走检索。
+# 工具执行后是否需要补充 RAG。
+# 所有可用工具的旅行意图都先调 API；RAG 只在工具结果之后补充背景。
+# 天气、票价、余票等实时值仍只允许来自工具，RAG 不得替代。
 INTENT_NEEDS_RETRIEVAL: dict[Intent, bool] = {
     Intent.DESTINATION: True,
     Intent.ITINERARY: True,
-    Intent.TRANSPORT: False,
-    # 住宿优先走实时高德 POI；只有工具无结果时，图里的 fallback 才检索知识库。
-    Intent.HOTEL: False,
+    Intent.TRANSPORT: True,
+    Intent.HOTEL: True,
     Intent.FOOD: True,
-    Intent.WEATHER: False,
+    Intent.WEATHER: True,
     Intent.CHITCHAT: False,
 }
 
@@ -88,15 +87,12 @@ def missing_slots(intent: Intent, slots: dict, text: str = "") -> list:
 
 
 def route_target(intent: Intent, missing: list) -> str:
-    """路由函数的返回值：ask / chat / retrieve / tools。
+    """路由函数第一跳只返回 ask / chat / tools。
 
-    对应 PRD 第 4.1 节的 route 节点：先判断要不要追问，再判断走知识库还是走工具，
-    避免"该追问却硬答"和"该调工具却编答案"。
+    统一策略是先追问、再实时工具，工具执行完才由 after_tools 决定是否补 RAG。
     """
     if intent is Intent.CHITCHAT:
         return "chat"
     if missing:
         return "ask"
-    if INTENT_NEEDS_RETRIEVAL.get(intent, True):
-        return "retrieve"
     return "tools"

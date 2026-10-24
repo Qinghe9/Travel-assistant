@@ -1,7 +1,7 @@
 # Agent 层设计说明
 
-对应 PRD v1.2 第 3、4、7 章：单个 LangGraph 状态图，把"理解 → 追问 → 检索 → 调工具 →
-校验 → 作答 → 落盘"串成一条可追溯的流水线。RAG 检索复用现有 `app/rag`，不重复实现。
+对应 PRD v1.2 第 3、4、7 章：单个 LangGraph 状态图，把"理解 → 追问 → 调工具/API →
+补充 RAG → 校验 → 作答 → 落盘"串成一条可追溯的流水线。RAG 复用现有 `app/rag`，不重复实现。
 
 ## 目录
 
@@ -37,21 +37,21 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 
 | 意图 | 例子 | 必填槽位 | 路径 | 用到的能力 |
 |---|---|---|---|---|
-| INT-01 目的地信息查询 | 成都有什么好玩的 | destination | retrieve → tools | 知识库 + 景点 |
-| INT-02 行程规划 | 规划 3 天西安行程 | destination, days | retrieve → tools | 知识库 + 天气 + 景点 |
-| INT-03 交通查询 | 广州到长沙高铁 / 天河区到广州塔怎么坐地铁 | origin, destination_place（高铁加 date） | tools | 高德驾车 + 公交/地铁换乘 + 铁路（需凭据） |
+| INT-01 目的地信息查询 | 成都有什么好玩的 | destination | tools → retrieve | 高德景点优先 + 知识库背景 |
+| INT-02 行程规划 | 规划 3 天西安行程 | destination, days | tools → retrieve | 实时工具优先 + 知识库背景 |
+| INT-03 交通查询 | 广州到长沙高铁 / 天河区到广州塔怎么坐地铁 | origin, destination_place（高铁加 date） | tools → retrieve | 高德驾车/公交优先 + 知识库补充 |
 
 > 高德没有 12306 车次/余票接口：公交/地铁可查线路与站点，高铁车次必须由正式铁路供应商提供，缺失时如实说明。
-| INT-04 住宿查询 | 广州天河区附近有什么酒店 | destination | tools →（无结果才）retrieve | 高德酒店 POI（仅名称/区域/地址）；RAG 仅兜底 |
-| INT-05 美食推荐 | 杭州有什么好吃的 | destination | retrieve → tools | 知识库（菜品/小吃）+ 高德餐饮 POI（餐厅名称） |
-| INT-06 天气查询 | 明天长沙天气怎样 | destination, date | tools | Open-Meteo |
+| INT-04 住宿查询 | 广州天河区附近有什么酒店 | destination | tools → retrieve | 高德酒店 POI 优先 + 知识库区域背景 |
+| INT-05 美食推荐 | 杭州有什么好吃的 | destination | tools → retrieve | 高德餐厅名称优先 + RAG 菜品/小吃 |
+| INT-06 天气查询 | 明天长沙天气怎样 | destination, date | tools → retrieve | 天气工具优先；RAG 只做背景，不替代实况 |
 | INT-07 闲聊与兜底 | 你好；谢谢 | 无 | chat | 大模型（无则固定话术） |
 
 两条边界（PRD 第 6.4 节）已在编排表里落实：
 
-1. 天气、票价、余票只走工具：写死 `INTENT_NEEDS_RETRIEVAL=False`，不可能拿知识库内容顶替；
-2. 景点、美食、行程等事实知识与实时工具按意图组合；没有证据时不靠模型记忆补全；
-3. 酒店优先用高德，只有工具没有结果时才回退 RAG，避免为已经被工具覆盖的问题白等检索。
+1. 所有旅行意图统一先执行工具/API，再执行 RAG 补充；
+2. 提示词中的证据顺序和预算固定为“工具在前、RAG 在后”，冲突时实时工具优先；
+3. 天气/票价/余票只能来自工具；RAG 可作背景，但不能伪装成实时值。
 
 ## 八个节点（PRD 第 4.1 节）
 
@@ -59,15 +59,14 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 |---|---|---|
 | `normalize_input` | 取本轮问题、归一化，并清空上一轮临时字段 | 空输入直接提示 |
 | `classify_and_extract` | 意图 + 槽位；高置信 Jev + 完整规则槽位时跳过主 LLM | 失败降级为规则式，不阻断 |
-| `route` | 条件边：ask / chat / retrieve / tools | 未知意图进兜底 |
-| `retrieve` | 混合检索知识库 | RAG 不可用则降级为"无证据"，不崩 |
+| `route` | 第一跳：ask / chat / tools / explain | 未知意图进兜底 |
 | `call_tools` | 同一意图下工具并行；高德共享地理编码缓存与 QPS 限速 | 超时/熔断/无凭据 → unavailable |
+| `retrieve` | 工具执行完成后补充 RAG，只追加证据，不覆盖 API 结果 | RAG 不可用则保留已有工具证据 |
 | `validate_plan` | 冲突检查（缺天数、预算过低、天气非工具来源） | 只报可核实的冲突 |
 | `compose` | 逐句绑定 `[source_id]` 作答 | 生成失败 → 抽取式兜底 |
 | `persist` | 轨迹落盘（JSONL） | 落盘失败不影响本轮答案 |
 
-分支节点：`ask_clarify`（缺槽追问）、`chat`（闲聊兜底）、`explain`（解释上一轮推荐依据）、
-`retrieve_hotel_fallback`（酒店工具无结果时回退知识库）。
+分支节点：`ask_clarify`（缺槽追问）、`chat`（闲聊兜底）、`explain`（解释上一轮推荐依据）。
 
 解释追问不会重新跑 Jev、LLM、RAG 或工具。`persist` 会把上一轮问题的意图、槽位、引用和工具结果
 存进 `last_turn`；用户随后问“为什么选这些酒店/依据是什么”时，直接进入 `explain` 节点解释筛选

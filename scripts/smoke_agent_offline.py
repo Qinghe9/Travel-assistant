@@ -251,7 +251,7 @@ llm_mod.available, llm_mod.chat_json = _real_llm_avail, _real_llm_json
 jev_mod.available, jev_mod.decide = _real_jev_available, _real_jev_decide
 
 # 0f) 酒店改走高德；不再走 Travelport
-from app.agent.intents import INTENT_TOOLS  # noqa: E402
+from app.agent.intents import INTENT_NEEDS_RETRIEVAL, INTENT_TOOLS  # noqa: E402
 from app.models.schemas import Intent as _Intent  # noqa: E402
 check("INT-04 只挂 hotel 工具", INTENT_TOOLS[_Intent.HOTEL] == ("hotel",),
       str(INTENT_TOOLS[_Intent.HOTEL]))
@@ -265,7 +265,11 @@ tool_registry.get_provider = lambda name: _StubProvider()
 _s_hotel = run("广州天河区附近有什么住宿酒店")
 check("酒店意图走工具", _s_hotel.get("intent") == "INT-04" and "call_tools" in nodes_of(_s_hotel),
       str(_s_hotel.get("intent")))
-check("酒店工具成功时跳过 RAG", "retrieve" not in nodes_of(_s_hotel), str(nodes_of(_s_hotel)))
+_hotel_nodes = nodes_of(_s_hotel)
+check("酒店先工具后补充 RAG",
+      "call_tools" in _hotel_nodes and "retrieve" in _hotel_nodes
+      and _hotel_nodes.index("call_tools") < _hotel_nodes.index("retrieve"),
+      str(_hotel_nodes))
 check("酒店不再调用 travelport", "travelport" not in str(_s_hotel.get("tool_results")),
       str(_s_hotel.get("tool_results"))[:80])
 
@@ -339,21 +343,29 @@ check("air_quality 映射 showapi_air_quality",
       getattr(_air_provider, "name", ""))
 tool_registry.get_provider = lambda name: _StubProvider()
 
-# 0j) 证据优先级：工具型意图不能被 RAG 挤掉
+# 0j) 证据优先级：工具证据在前，RAG 留作背景补充
 _ev_kb = [{"kind": "knowledge", "source_id": "k%d" % i, "text": "知识"} for i in range(3)]
 _ev_tool = [{"kind": "tool", "source_id": "t1", "text": "工具"}]
 _ev_tool2 = [{"kind": "tool", "source_id": "t2", "text": "工具2"}]
+check("所有旅行意图工具后补 RAG",
+      all(INTENT_NEEDS_RETRIEVAL[intent] for intent in
+          (_Intent.DESTINATION, _Intent.ITINERARY, _Intent.TRANSPORT,
+           _Intent.HOTEL, _Intent.FOOD, _Intent.WEATHER))
+      and not INTENT_NEEDS_RETRIEVAL[_Intent.CHITCHAT],
+      str(INTENT_NEEDS_RETRIEVAL))
 _hotel_pick = nodes._evidence_for_prompt({"intent": "INT-04", "evidence": _ev_kb + _ev_tool})
-check("酒店只取工具证据", [e["source_id"] for e in _hotel_pick] == ["t1"],
+check("酒店工具证据排在 RAG 前",
+      [e["source_id"] for e in _hotel_pick] == ["t1", "k0", "k1", "k2"],
       str([e["source_id"] for e in _hotel_pick]))
 _weather_pick = nodes._evidence_for_prompt({"intent": "INT-06", "evidence": _ev_kb + _ev_tool})
-check("天气只取工具证据", [e["source_id"] for e in _weather_pick] == ["t1"],
+check("天气工具证据排在 RAG 前",
+      [e["source_id"] for e in _weather_pick] == ["t1", "k0", "k1", "k2"],
       str([e["source_id"] for e in _weather_pick]))
 _it_pick = nodes._evidence_for_prompt({"intent": "INT-02", "evidence": _ev_kb + _ev_tool + _ev_tool2})
 _it_ids = [e["source_id"] for e in _it_pick]
-check("行程混合知识+工具", "k0" in _it_ids and "t1" in _it_ids, str(_it_ids))
+check("行程工具在前 RAG 在后", _it_ids == ["t1", "t2", "k0", "k1"], str(_it_ids))
 
-# 0k) 美食：RAG 菜品 + 高德餐厅
+# 0k) 美食：先高德餐厅，再 RAG 补充菜品
 check("INT-05 挂 food 工具", _TOOLS[_Intent.FOOD] == ("food",), str(_TOOLS[_Intent.FOOD]))
 tool_registry.get_provider = _base_get_provider
 _food_provider = tool_registry.get_provider("food")
@@ -363,7 +375,7 @@ check("food 映射 amap_poi_food_search",
 tool_registry.get_provider = lambda name: _StubProvider()
 _food_pick = nodes._evidence_for_prompt({"intent": "INT-05", "evidence": _ev_kb + _ev_tool})
 _food_ids = [e["source_id"] for e in _food_pick]
-check("美食混合知识+工具", "k0" in _food_ids and "t1" in _food_ids, str(_food_ids))
+check("美食工具在前 RAG 在后", _food_ids == ["t1", "k0", "k1", "k2"], str(_food_ids))
 
 # 1) 闲聊
 s = run("你好")
@@ -377,7 +389,7 @@ check("缺槽触发追问", "ask_clarify" in nodes_of(s), str(nodes_of(s)))
 check("追问文案不含猜测", "请补充" in (s.get("answer") or ""), s.get("answer"))
 check("缺槽不进检索", "retrieve" not in nodes_of(s), str(nodes_of(s)))
 
-# 3) 行程规划：检索 + 工具 + 逐句绑定
+# 3) 行程规划：工具 + 补充检索 + 逐句绑定
 thread = "t-itinerary"
 s = run("2人预算3000元，规划3天西安历史文化游", thread)
 check("识别为行程规划", s.get("intent") == "INT-02", s.get("intent"))
@@ -386,6 +398,9 @@ check("槽位抽取完整", (s.get("slots") or {}).get("days") == 3
       and (s.get("slots") or {}).get("budget") == 3000, str(s.get("slots")))
 check("走了检索分支", "retrieve" in nodes_of(s), str(nodes_of(s)))
 check("走了工具分支", "call_tools" in nodes_of(s), str(nodes_of(s)))
+_it_nodes = nodes_of(s)
+check("行程先工具后 RAG",
+      _it_nodes.index("call_tools") < _it_nodes.index("retrieve"), str(_it_nodes))
 answer = s.get("answer") or ""
 check("答案带脚注编号", "[1]" in answer or "[2]" in answer, answer[:60])
 check("正文不再出现 hex 编号", re.search(r"\[[0-9a-fA-F]{8,16}\]", answer) is None, answer[:60])
@@ -554,8 +569,12 @@ check("高德并发地理编码去重",
 
 s = with_provider(_OkProvider(), "明天北京天气怎么样")
 check("识别为天气查询", s.get("intent") == "INT-06", s.get("intent"))
-check("天气不检索知识库", "retrieve" not in nodes_of(s), str(nodes_of(s)))
 check("天气调用工具", "call_tools" in nodes_of(s), str(nodes_of(s)))
+_weather_nodes = nodes_of(s)
+check("天气先工具后补充 RAG",
+      "retrieve" in _weather_nodes
+      and _weather_nodes.index("call_tools") < _weather_nodes.index("retrieve"),
+      str(_weather_nodes))
 check("工具证据进入引用", any(c.get("kind") == "tool" for c in (s.get("citations") or [])),
       str(s.get("citations"))[:70])
 check("答案绑定工具引用",
@@ -571,13 +590,20 @@ check("工具不可用时拒答不编造", s.get("no_evidence") is True, str(s.g
 s = run("广州到长沙高铁有哪些")
 check("交通缺日期则追问", "ask_clarify" in nodes_of(s), str(nodes_of(s)))
 s = run("明天从广州到长沙的高铁")
-check("交通带日期走工具", "call_tools" in nodes_of(s) and "retrieve" not in nodes_of(s),
-      str(nodes_of(s)))
+_transport_nodes = nodes_of(s)
+check("交通先工具后补充 RAG",
+      "call_tools" in _transport_nodes and "retrieve" in _transport_nodes
+      and _transport_nodes.index("call_tools") < _transport_nodes.index("retrieve"),
+      str(_transport_nodes))
 
-# 7) 美食：走知识库
+# 7) 美食：先高德工具，再 RAG 补充
 s = run("长沙有什么必吃的美食")
 check("识别为美食推荐", s.get("intent") == "INT-05", s.get("intent"))
-check("美食走检索", "retrieve" in nodes_of(s), str(nodes_of(s)))
+_food_nodes = nodes_of(s)
+check("美食先工具后补充 RAG",
+      "call_tools" in _food_nodes and "retrieve" in _food_nodes
+      and _food_nodes.index("call_tools") < _food_nodes.index("retrieve"),
+      str(_food_nodes))
 
 # 8) 无证据时不编造
 def empty_evidence(query, city=None, category=None, entity=None, top_k=None):

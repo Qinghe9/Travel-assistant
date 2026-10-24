@@ -6,14 +6,13 @@
       -> classify_and_extract
            ├─ ask_clarify  (缺必填槽位)      -> persist -> END
            ├─ chat         (闲聊兜底 INT-07) -> persist -> END
-           ├─ retrieve     (知识类意图)  ┐
-           └─ call_tools   (实时类意图)  ┘
-      -> call_tools -> validate_plan -> compose -> persist -> END
-      -> call_tools -> retrieve_hotel_fallback (酒店无结果时才回退 RAG)
+           └─ call_tools   (所有旅行意图先调 API)
+      -> call_tools -> retrieve (工具成功后补充 RAG) -> validate_plan
+      -> compose -> persist -> END
       -> explain      (解释上一轮推荐理由) -> persist -> END
 
-注意 retrieve 之后仍会进 call_tools：行程规划这类意图既需要知识库也需要天气，
-两条证据在 call_tools 里合并成同一个证据池。
+统一顺序是：工具/API 优先，RAG 后补。实时字段与知识背景进入同一个证据池，
+但冲突时实时工具证据优先。
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ from app.agent.state import AgentState
 ROUTE_TARGETS = {
     "ask": "ask_clarify",
     "chat": "chat",
-    "retrieve": "retrieve",
     "tools": "call_tools",
     "explain": "explain",
 }
@@ -45,7 +43,6 @@ def build_graph(checkpointer=None, with_memory: bool = True, store=None):
     builder.add_node("ask_clarify", nodes.ask_clarify)
     builder.add_node("chat", nodes.chat)
     builder.add_node("retrieve", nodes.retrieve)
-    builder.add_node("retrieve_hotel_fallback", nodes.retrieve_hotel_fallback)
     builder.add_node("call_tools", nodes.call_tools)
     builder.add_node("validate_plan", nodes.validate_plan)
     builder.add_node("compose", nodes.compose)
@@ -55,11 +52,10 @@ def build_graph(checkpointer=None, with_memory: bool = True, store=None):
     builder.add_edge(START, "normalize_input")
     builder.add_edge("normalize_input", "classify_and_extract")
     builder.add_conditional_edges("classify_and_extract", nodes.route, ROUTE_TARGETS)
-    builder.add_edge("retrieve", "call_tools")
     builder.add_conditional_edges("call_tools", nodes.after_tools,
-                                  {"retrieve": "retrieve_hotel_fallback",
+                                  {"retrieve": "retrieve",
                                    "validate": "validate_plan"})
-    builder.add_edge("retrieve_hotel_fallback", "validate_plan")
+    builder.add_edge("retrieve", "validate_plan")
     builder.add_edge("validate_plan", "compose")
     builder.add_edge("compose", "persist")
     builder.add_edge("ask_clarify", "persist")

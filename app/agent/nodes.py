@@ -21,7 +21,7 @@ import datetime as _dt
 from app.agent import config as cfg
 from app.agent import jev, llm, prompts, retrieval
 from app.agent import slots as slot_lib
-from app.agent.intents import SLOT_LABEL, missing_slots, route_target
+from app.agent.intents import INTENT_NEEDS_RETRIEVAL, SLOT_LABEL, missing_slots, route_target
 from app.agent.state import trace_event
 from app.agent.store import load_profile, profile_hint, save_profile
 from app.models.schemas import Intent, LLMIntentPayload, ToolStatus, dump, now_iso
@@ -388,14 +388,10 @@ def classify_and_extract(state):
 
 
 def route(state) -> str:
-    """条件边：返回 ask / chat / retrieve / tools。"""
+    """第一跳：只做追问、闲聊、工具或解释分支。"""
     if state.get("follow_up") == "explain":
         return "explain"
-    target = route_target(_as_intent(state.get("intent")), state.get("missing") or [])
-    # 「智能搜索」关闭时跳过知识库，只保留工具类能力
-    if target == "retrieve" and not state.get("smart_search", True):
-        return "tools"
-    return target
+    return route_target(_as_intent(state.get("intent")), state.get("missing") or [])
 
 
 def ask_clarify(state):
@@ -517,7 +513,7 @@ def explain(state):
 
 
 def retrieve(state):
-    """检索知识库（PRD 第 6 章）。RAG 不可用时降级为无证据，不崩。"""
+    """工具之后的 RAG 补充检索；只追加证据，不覆盖 API 结果。"""
     t0 = time.perf_counter()
     slots = state.get("slots") or {}
     query = state.get("query") or ""
@@ -525,15 +521,18 @@ def retrieve(state):
     ev = retrieval.build_evidence(query, city=city, category=slots.get("category"),
                                   entity=slots.get("entity"))
     chunks = retrieval.to_chunks(ev)
-    detail = "命中 %d 条" % len(chunks)
+    detail = "RAG 补充命中 %d 条" % len(chunks)
     if ev.get("error"):
         detail += "；降级原因：%s" % str(ev["error"])[:80]
     return {
-        "evidence": chunks,
-        "citations": list(ev.get("citations") or []),
+        "evidence": list(state.get("evidence") or []) + chunks,
+        "citations": list(state.get("citations") or []) + list(ev.get("citations") or []),
         "evidence_meta": retrieval.meta_of(ev),
-        "trace": [trace_event("retrieve", _elapsed_ms(t0), detail=detail,
-                              hits=len(chunks), degraded=bool(ev.get("degraded")))],
+        "trace": [trace_event("retrieve", _elapsed_ms(t0),
+                              detail=detail + "（API 结果保留且优先）",
+                              hits=len(chunks), degraded=bool(ev.get("degraded")),
+                              phase="rag_supplement",
+                              tool_evidence_count=len(state.get("evidence") or []))],
     }
 
 
@@ -575,25 +574,11 @@ def call_tools(state):
 
 
 def after_tools(state) -> str:
-    """酒店工具成功时直接校验；没有结果才回退知识库，避免无条件等待 RAG。"""
-    if _as_intent(state.get("intent")) is Intent.HOTEL:
-        ok_tools = [item for item in (state.get("tool_results") or [])
-                    if item.get("status") == _INT_TOOL_OK]
-        if not ok_tools:
-            return "retrieve"
+    """工具始终先执行；再按「智能搜索」开关补充 RAG。"""
+    intent = _as_intent(state.get("intent"))
+    if state.get("smart_search", True) and INTENT_NEEDS_RETRIEVAL.get(intent, False):
+        return "retrieve"
     return "validate"
-
-
-def retrieve_hotel_fallback(state):
-    """酒店实时工具无结果时，复用通用 RAG 检索作为兜底。"""
-    result = retrieve(state)
-    events = []
-    for event in result.get("trace") or []:
-        item = dict(event)
-        item["detail"] = "酒店工具无结果，回退知识库；" + (item.get("detail") or "")
-        events.append(item)
-    result["trace"] = events
-    return result
 
 
 def validate_plan(state):
@@ -632,30 +617,26 @@ def validate_plan(state):
 
 
 def _evidence_for_prompt(state: dict, limit: int = 4) -> list:
-    """按意图决定证据优先级，避免工具证据被 RAG 挤掉。
-
-    - 天气/交通：实时数据，工具优先且只用工具；
-    - 住宿：高德酒店名称优先；工具为空才回退知识库；
-    - 美食：知识库为主；
-    - 目的地：知识库为主 + 1 条 POI；
-    - 行程：知识库 2 条 + 工具 2 条（天气/景点等）。
-    """
+    """统一工具优先：工具证据排在 RAG 前，并给 RAG 留至少 1 个补充位。"""
     evidence = state.get("evidence") or []
-    intent = _as_intent(state.get("intent"))
     tools = [item for item in evidence if item.get("kind") == "tool"]
     knowledge = [item for item in evidence if item.get("kind") != "tool"]
+    if not tools:
+        return knowledge[:limit]
+    if not knowledge:
+        return tools[:limit]
 
-    if intent in (Intent.WEATHER, Intent.TRANSPORT):
-        picked = tools
-    elif intent is Intent.HOTEL:
-        picked = tools or knowledge
-    elif intent is Intent.FOOD:
-        picked = knowledge[:2] + tools[:2]
-    elif intent is Intent.DESTINATION:
-        picked = knowledge[:3] + tools[:1]
-    else:
-        picked = knowledge[:2] + tools[:2]
-    return (picked or evidence)[:limit]
+    # 最多 limit-1 条工具，至少留 1 条 RAG 作背景补充。
+    tool_budget = min(len(tools), max(1, limit - 1))
+    picked = list(tools[:tool_budget])
+    remaining = limit - len(picked)
+    picked.extend(knowledge[:remaining])
+
+    # 如果知识条目不够，再用剩余工具补满；始终保持工具在前。
+    remaining = limit - len(picked)
+    if remaining > 0:
+        picked.extend(tools[tool_budget:tool_budget + remaining])
+    return picked[:limit]
 
 
 def _evidence_block(evidence: list, limit: int = 3, per_chars: int = 900) -> str:
@@ -726,8 +707,19 @@ def compose(state):
     query = state.get("query") or ""
     evidence = state.get("evidence") or []
     citations = state.get("citations") or []
+    intent = _as_intent(state.get("intent"))
     unavailable = [item for item in (state.get("tool_results") or [])
                    if item.get("status") != _INT_TOOL_OK]
+    ok_tools = [item for item in (state.get("tool_results") or [])
+                if item.get("status") == _INT_TOOL_OK]
+
+    # RAG 是背景补充，不能顶替实时天气。工具失败时仍如实拒答，
+    # 避免把知识库里的旧天气或常识写成今天的实况。
+    if intent is Intent.WEATHER and not ok_tools:
+        return {"answer": _with_notes(NO_EVIDENCE_ANSWER, unavailable),
+                "no_evidence": True, "degraded": True, "evidence_binding_rate": 0.0,
+                "trace": [trace_event("compose", _elapsed_ms(t0), status="degraded",
+                                      detail="实时天气工具失败；已取得的 RAG 仅作背景，不用于伪装实况")]}
 
     if not evidence:
         return {"answer": _with_notes(NO_EVIDENCE_ANSWER, unavailable),
@@ -741,6 +733,9 @@ def compose(state):
     if llm.available():
         try:
             hint = profile_hint(state.get("profile") or {})
+            hint = (hint + "\n" if hint else "") + (
+                "证据按“工具/API 优先、RAG 补充”排序。实时事实以工具为准；"
+                "RAG 只补充景点、菜品、文化或一般规则，不得替代实时数值。")
             if state.get("thinking"):
                 hint = (hint + "\n" if hint else "") + (
                     "用户开启了深度思考：请给出更详细的分日安排、取舍理由与注意事项；"
@@ -751,7 +746,8 @@ def compose(state):
             if _as_intent(state.get("intent")) is Intent.HOTEL:
                 hint = (hint + "\n" if hint else "") + (
                     "住宿查询：只列酒店名称、区域和地址，不输出价格、房型、电话；"
-                    "以高德工具返回的酒店结果为准。")
+                    "酒店名单以高德工具为准。RAG 若有相关的区域环境、周边景点或交通背景，"
+                    "可在名单后用 1-2 句补充并保留引用；不相关就不写。")
             if _as_intent(state.get("intent")) is Intent.FOOD:
                 hint = (hint + "\n" if hint else "") + (
                     "美食查询：知识库用于菜品/小吃介绍，高德工具用于餐厅名称；"
