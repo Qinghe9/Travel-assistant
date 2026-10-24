@@ -373,6 +373,41 @@ check("用第一句北京补齐交通终点",
 check("省略终点复合请求不再误追问",
       "ask_clarify" not in nodes_of(_s_omitted), str(nodes_of(_s_omitted)))
 
+# 重述与相同问题复用：不重跑检索/工具，避免同一问题两次答案漂移
+_repeat_thread = "repeat-regenerate"
+_s_repeat_first = run("北京有什么好玩的", _repeat_thread)
+_s_regenerate = run("再帮我重新回答上面的问题", _repeat_thread)
+check("重新回答识别为 regenerate",
+      _s_regenerate.get("follow_up") == "regenerate"
+      and "regenerate" in nodes_of(_s_regenerate),
+      "%s / %s" % (_s_regenerate.get("follow_up"), nodes_of(_s_regenerate)))
+check("重新回答不重跑工具和 RAG",
+      not (_s_regenerate.get("tool_results") or [])
+      and _s_regenerate.get("answer") == _s_repeat_first.get("answer"),
+      str(_s_regenerate.get("tool_results")))
+_s_same = run("北京有什么好玩的", _repeat_thread)
+check("相同问题短时复用答案",
+      _s_same.get("follow_up") == "reuse"
+      and _s_same.get("answer") == _s_repeat_first.get("answer"),
+      "%s / %s" % (_s_same.get("follow_up"), _s_same.get("answer")[:30]))
+_old_turn = {
+    "query": "北京怎么玩", "normalized_query": "北京怎么玩",
+    "intent": "INT-01", "intents": ["INT-01"], "tasks": [],
+    "slots": {"destination": "北京"}, "answer": "上一轮完整答案 [1]",
+    "citations": [{"source_id": SID_A, "title": "旧证据", "index": 1}],
+    "completed_at": (_dt.datetime.now() - _dt.timedelta(days=2)).isoformat(
+        timespec="seconds"),
+}
+_s_old_regen = graph.invoke(
+    {"messages": [{"role": "user", "content": "重新回答上面的问题"}],
+     "thread_id": "old-regenerate", "last_turn": _old_turn},
+    {"configurable": {"thread_id": "old-regenerate"}},
+)
+check("显式重新回答不受时间窗口限制",
+      _s_old_regen.get("follow_up") == "regenerate"
+      and _s_old_regen.get("answer") == "上一轮完整答案 [1]",
+      str(_s_old_regen.get("follow_up")))
+
 # 0g) RAG 向量缓存跨线程（修复 SqliteSaver 之外的 SQLite 报错）
 from app.rag.indexing.embed import EmbedCache  # noqa: E402
 _cache_path = Path(tempfile.gettempdir()) / "embed_cache_thread_test.sqlite"
@@ -696,6 +731,54 @@ amap_mod._GEO_INFLIGHT.clear()
 check("高德并发地理编码去重",
       _geo_calls[0] == 1 and _geo_results == ["108.9,34.3"] * 3 and not _geo_errors,
       "calls=%s results=%s errors=%s" % (_geo_calls[0], _geo_results, _geo_errors))
+
+# 工具证据 Top-K：送入答案的景点/酒店/餐饮最多 5 条，完整结果仍留在审计状态
+_many = ToolResult(provider="amap_test", status=ToolStatus.OK,
+                   data={"酒店": ["酒店%d" % i for i in range(1, 21)]},
+                   message="ok", fetched_at="2026-10-24T20:00:00+08:00")
+_many_evidence = tool_registry.to_evidence([_many])
+_many_text = _many_evidence[0]["text"] if _many_evidence else ""
+check("工具候选 Top-K 压缩",
+      "酒店15" in _many_text and "酒店16" not in _many_text
+      and "最多展示 15 条" in _many_text,
+      _many_text[:100])
+_poi_distance = ToolResult(
+    provider="amap-poi", status=ToolStatus.OK,
+    data={"_points": [{"name": "天安门", "location": "116.397,39.908"},
+                      {"name": "什刹海", "location": "116.389,39.941"}]},
+)
+_hotel_distance = ToolResult(
+    provider="amap_poi_hotel_search", status=ToolStatus.OK,
+    data={"_points": [{"name": "测试酒店", "location": "116.407,39.904"}]},
+)
+nodes._annotate_hotel_distances([_poi_distance, _hotel_distance], {})
+check("酒店到行程景点距离矩阵",
+      bool(_hotel_distance.data.get("酒店距离"))
+      and len(_hotel_distance.data.get("_distance_matrix") or []) == 2
+      and "直线约" in _hotel_distance.data["酒店距离"][0],
+      str(_hotel_distance.data.get("酒店距离")))
+_distance_appendix = nodes._hotel_distance_appendix({
+    "tool_results": [{"provider": "amap_poi_hotel_search", "status": "ok",
+                      "data": _hotel_distance.data}],
+}, [{"provider": "amap_poi_hotel_search", "index": 1}])
+check("酒店距离固定附入答案",
+      "酒店到行程景点距离" in _distance_appendix
+      and "测试酒店" in _distance_appendix,
+      _distance_appendix[:100])
+_limits = nodes._quality_limitations({
+    "slots": {},
+    "tool_results": [
+        {"provider": "amap-route", "status": "ok",
+         "data": {"距离(公里)": 2131.1}},
+        {"provider": "amap_poi_hotel_search", "status": "ok",
+         "data": {"检索中心": "北京"}},
+    ],
+}, [])
+check("限制与待确认自动补齐",
+      any("不建议作为首选" in line for line in _limits)
+      and any("默认以“北京”为检索中心" in line for line in _limits)
+      and any("房价、房态" in line for line in _limits),
+      str(_limits))
 
 
 s = with_provider(_OkProvider(), "明天北京天气怎么样")

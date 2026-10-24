@@ -10,6 +10,7 @@
       -> call_tools -> retrieve (工具成功后补充 RAG) -> validate_plan
       -> compose -> persist -> END
       -> explain      (解释上一轮推荐理由) -> persist -> END
+      -> reuse/regenerate (相同问题或要求重新回答) -> persist -> END
 
 统一顺序是：工具/API 优先，RAG 后补。实时字段与知识背景进入同一个证据池，
 但冲突时实时工具证据优先。
@@ -29,6 +30,8 @@ ROUTE_TARGETS = {
     "chat": "chat",
     "tools": "call_tools",
     "explain": "explain",
+    "reuse": "reuse",
+    "regenerate": "regenerate",
 }
 
 _AGENT = None
@@ -47,6 +50,8 @@ def build_graph(checkpointer=None, with_memory: bool = True, store=None):
     builder.add_node("validate_plan", nodes.validate_plan)
     builder.add_node("compose", nodes.compose)
     builder.add_node("explain", nodes.explain)
+    builder.add_node("reuse", nodes.reuse_previous)
+    builder.add_node("regenerate", nodes.regenerate_previous)
     builder.add_node("persist", nodes.persist)
 
     builder.add_edge(START, "normalize_input")
@@ -61,6 +66,8 @@ def build_graph(checkpointer=None, with_memory: bool = True, store=None):
     builder.add_edge("ask_clarify", "persist")
     builder.add_edge("chat", "persist")
     builder.add_edge("explain", "persist")
+    builder.add_edge("reuse", "persist")
+    builder.add_edge("regenerate", "persist")
     builder.add_edge("persist", END)
 
     if checkpointer is None and with_memory:

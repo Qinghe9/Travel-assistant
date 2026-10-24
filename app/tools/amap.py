@@ -128,7 +128,7 @@ class AmapPOI(Provider):
         keywords = (entity or "").strip()
         params = {
             "city": city, "citylimit": "true", "sortrule": "weight",
-            "offset": 10, "page": 1, "extensions": "base", "output": "JSON",
+            "offset": 25, "page": 1, "extensions": "base", "output": "JSON",
         }
         if keywords:
             # 用户点名了具体地点：按关键词查
@@ -139,6 +139,7 @@ class AmapPOI(Provider):
         data = _get("/place/text", params, timeout=self.timeout)
         rows = data.get("pois") or []
         spots = []
+        points = []
         for row in rows:
             name = (row.get("name") or "").strip()
             if not name:
@@ -150,13 +151,18 @@ class AmapPOI(Provider):
             address = (address or "").strip()
             tag = "（%s%s）" % (area, ("，" + address) if address else "")
             spots.append(name + tag)
+            if row.get("location"):
+                points.append({"name": name, "location": row.get("location"),
+                               "area": area, "address": address})
         if not spots:
             return make_unavailable(self.name, "高德没有返回可用景点：%s" % keywords,
                                     "empty_response")
         return make_ok(self.name, {
             "城市": city,
             "关键词": keywords,
-            "景点": spots[:8],
+            "检索中心": ("%s·%s" % (city, keywords)) if keywords else city,
+            "景点": spots[:15],
+            "_points": points[:15],
             "数据来源": "高德地图",
         }, "获取成功", ttl=self.ttl)
 
@@ -193,7 +199,7 @@ class AmapHotelPOI(Provider):
             "location": geo.get("location"),
             "radius": 8000,
             "types": "100000|100100|100200",
-            "offset": 10,
+            "offset": 25,
             "page": 1,
         }
         print("[amap-hotel] request=%s" % request, flush=True)
@@ -204,6 +210,7 @@ class AmapHotelPOI(Provider):
         }, timeout=self.timeout)
 
         hotels = []
+        hotel_points = []
         for row in data.get("pois") or []:
             type_text = row.get("type") or ""
             # 只认主类型为「住宿服务」；混合类型的酒家/餐厅会被排除
@@ -219,6 +226,9 @@ class AmapHotelPOI(Provider):
             address = (address or "").strip()
             extra = "，".join(x for x in (district, address) if x)
             hotels.append("%s（%s）" % (name, extra) if extra else name)
+            if row.get("location"):
+                hotel_points.append({"name": name, "location": row.get("location"),
+                                     "area": district, "address": address})
         hotels = list(dict.fromkeys(hotels))
         print("[amap-hotel] names=%s" % hotels[:10], flush=True)
         if not hotels:
@@ -227,7 +237,10 @@ class AmapHotelPOI(Provider):
         return make_ok(self.name, {
             "城市": city,
             "区域": center,
-            "酒店": hotels[:8],
+            "检索中心": center,
+            "检索半径": "8公里",
+            "酒店": hotels[:15],
+            "_points": hotel_points[:15],
             "数据来源": "高德地图",
         }, "获取成功（仅名称，无价格/房型）", ttl=self.ttl)
 
@@ -256,7 +269,7 @@ class AmapFoodPOI(Provider):
             return make_unavailable(self.name, "区域解析失败：%s" % exc,
                                     exc.code or "geo_error")
         request = {"city": city, "area": center, "location": geo.get("location"),
-                   "radius": 5000, "types": "050000", "offset": 10, "page": 1}
+                   "radius": 5000, "types": "050000", "offset": 25, "page": 1}
         print("[amap-food] request=%s" % request, flush=True)
         data = _get("/place/around", {
             "location": geo["location"], "radius": request["radius"],
@@ -286,7 +299,9 @@ class AmapFoodPOI(Provider):
         return make_ok(self.name, {
             "城市": city,
             "区域": center,
-            "餐饮": foods[:8],
+            "检索中心": center,
+            "检索半径": "5公里",
+            "餐饮": foods[:15],
             "数据来源": "高德地图",
         }, "获取成功（仅餐厅名称/地址，无菜品与价格）", ttl=self.ttl)
 
@@ -318,14 +333,17 @@ class AmapRoute(Provider):
             minutes = round(float(path.get("duration") or 0) / 60.0)
         except (TypeError, ValueError):
             return make_unavailable(self.name, "路线数据格式异常", "bad_response")
-        return make_ok(self.name, {
+        data = {
             "起点": start_city,
             "终点": target_city,
             "出行方式": "驾车" if mode == "driving" else "步行",
             "距离(公里)": distance_km,
             "预计耗时(分钟)": minutes,
             "数据来源": "高德地图",
-        }, "获取成功", ttl=self.ttl)
+        }
+        if mode == "driving" and distance_km > 800:
+            data["合理性提示"] = "跨城距离较远，不建议将驾车作为首选；应优先比较铁路或航班"
+        return make_ok(self.name, data, "获取成功", ttl=self.ttl)
 
 
 class AmapTransit(Provider):
@@ -373,7 +391,7 @@ class AmapTransit(Provider):
                                     % (origin, destination_place), "empty_response")
 
         plans = []
-        for idx, item in enumerate(transits[:2], start=1):
+        for idx, item in enumerate(transits[:15], start=1):
             parts = []
             for seg in item.get("segments") or []:
                 walking = seg.get("walking") or {}

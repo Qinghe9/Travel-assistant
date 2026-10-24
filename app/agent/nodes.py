@@ -189,6 +189,32 @@ def _is_explain_followup(text: str, last_turn: dict) -> bool:
     return True
 
 
+_REGENERATE_RE = re.compile(
+    r"(重新回答|再回答|再说一遍|重新说|重新整理|换个说法|重述|重新生成|"
+    r"重新组织|把上面.*(再|重新))"
+)
+
+
+def _last_turn_is_fresh(last_turn: dict, max_minutes: int = 10) -> bool:
+    """重复问题只在短时间窗口内复用，避免实时天气等内容无限期旧答复用。"""
+    stamp = (last_turn or {}).get("completed_at", "")
+    if not stamp:
+        return False
+    try:
+        completed = _dt.datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return False
+    now = _dt.datetime.now(completed.tzinfo) if completed.tzinfo else _dt.datetime.now()
+    return (now - completed).total_seconds() <= max_minutes * 60
+
+
+def _same_query(last_turn: dict, text: str) -> bool:
+    if not last_turn or not last_turn.get("answer"):
+        return False
+    previous = last_turn.get("normalized_query") or last_turn.get("query") or ""
+    return slot_lib.normalize_text(previous) == slot_lib.normalize_text(text)
+
+
 def _build_tasks_from_specs(candidates: list, previous: dict, profile: dict) -> tuple:
     """把 (intent, query, slots) 规划项整理成可执行任务，并补齐共享槽位。"""
     aggregate = dict(previous or {})
@@ -422,6 +448,53 @@ def classify_and_extract(state):
                 "classify_and_extract", _elapsed_ms(t0),
                 detail="识别为跨会话记忆回忆", source="memory",
                 confidence=1.0, slots=slots_out, missing=[],
+            )],
+        }
+
+    # 重述/重新回答：只复用上一轮最终答案和引用，绝不重跑工具与 RAG。
+    if (_REGENERATE_RE.search(text or "") and last_turn.get("answer")
+            and len(text) <= 40):
+        prior_intent = _as_intent(last_turn.get("intent"))
+        return {
+            "intent": prior_intent.value,
+            "intents": list(last_turn.get("intents") or [prior_intent.value]),
+            "tasks": list(last_turn.get("tasks") or []),
+            "confidence": 1.0,
+            "slots": dict(last_turn.get("slots") or {}),
+            "missing": [],
+            "pending_intent": "",
+            "pending_missing": [],
+            "follow_up": "regenerate",
+            "route_source": "regenerate",
+            "normalized_query": last_turn.get("normalized_query") or last_turn.get("query") or text,
+            "trace": [trace_event(
+                "classify_and_extract", _elapsed_ms(t0),
+                detail="识别为重新回答，复用上一轮结果",
+                source="regenerate", confidence=1.0,
+                slots=dict(last_turn.get("slots") or {}), missing=[],
+            )],
+        }
+
+    # 完全相同的重复问题在短时间窗口内直接复用，避免两次结果漂移。
+    if _same_query(last_turn, text) and _last_turn_is_fresh(last_turn):
+        prior_intent = _as_intent(last_turn.get("intent"))
+        return {
+            "intent": prior_intent.value,
+            "intents": list(last_turn.get("intents") or [prior_intent.value]),
+            "tasks": list(last_turn.get("tasks") or []),
+            "confidence": 1.0,
+            "slots": dict(last_turn.get("slots") or {}),
+            "missing": [],
+            "pending_intent": "",
+            "pending_missing": [],
+            "follow_up": "reuse",
+            "route_source": "reuse",
+            "normalized_query": last_turn.get("normalized_query") or last_turn.get("query") or text,
+            "trace": [trace_event(
+                "classify_and_extract", _elapsed_ms(t0),
+                detail="相同问题在 10 分钟内，直接复用上一轮答案",
+                source="reuse", confidence=1.0,
+                slots=dict(last_turn.get("slots") or {}), missing=[],
             )],
         }
 
@@ -665,6 +738,8 @@ def route(state) -> str:
     """第一跳：只做追问、闲聊、工具或解释分支。"""
     if state.get("follow_up") == "explain":
         return "explain"
+    if state.get("follow_up") in ("reuse", "regenerate"):
+        return state.get("follow_up")
     return route_target(_as_intent(state.get("intent")), state.get("missing") or [])
 
 
@@ -801,6 +876,35 @@ def explain(state):
     }
 
 
+def _replay_previous(state, mode: str):
+    """复用上一轮最终答案与引用，不访问任何外部工具或 RAG。"""
+    t0 = time.perf_counter()
+    last_turn = dict(state.get("last_turn") or {})
+    answer = last_turn.get("answer") or NO_EVIDENCE_ANSWER
+    detail = "重新回答：复用上一轮答案" if mode == "regenerate" else "相同问题：复用上一轮答案"
+    return {
+        "answer": answer,
+        "citations": list(last_turn.get("citations") or []),
+        "plan": {"ok": True, "issues": [], "follow_up": mode,
+                 "based_on_trace_id": last_turn.get("trace_id", "")},
+        "no_evidence": False,
+        "degraded": bool(last_turn.get("degraded")),
+        "evidence_binding_rate": float(last_turn.get("evidence_binding_rate") or 0.0),
+        "trace": [trace_event(
+            mode, _elapsed_ms(t0), detail=detail + "，未重跑工具和 RAG",
+            based_on_trace_id=last_turn.get("trace_id", ""),
+        )],
+    }
+
+
+def reuse_previous(state):
+    return _replay_previous(state, "reuse")
+
+
+def regenerate_previous(state):
+    return _replay_previous(state, "regenerate")
+
+
 def retrieve(state):
     """工具之后的 RAG 补充检索；只追加证据，不覆盖 API 结果。"""
     t0 = time.perf_counter()
@@ -825,12 +929,95 @@ def retrieve(state):
     }
 
 
+def _parse_location(value):
+    try:
+        lon, lat = str(value or "").split(",", 1)
+        return float(lon), float(lat)
+    except (TypeError, ValueError):
+        return None
+
+
+def _haversine_km(first, second) -> float:
+    """经纬度直线距离（公里）；只用于“更近”排序，不代表行驶距离。"""
+    import math
+    lon1, lat1 = first
+    lon2, lat2 = second
+    radius = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = (math.sin(dp / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return radius * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _item_data(item) -> dict:
+    if isinstance(item, dict):
+        return dict(item.get("data") or {})
+    return dict(getattr(item, "data", None) or {})
+
+
+def _attraction_points(items: list) -> list:
+    for item in items or []:
+        provider = item.get("provider") if isinstance(item, dict) else getattr(item, "provider", "")
+        if provider == "amap-poi":
+            return list(_item_data(item).get("_points") or [])
+    return []
+
+
+def _annotate_hotel_distances(results: list, last_turn: dict) -> None:
+    """为酒店结果生成到上一轮/本轮行程景点的直线距离矩阵与最近景点。"""
+    attractions = _attraction_points(results)
+    if not attractions:
+        attractions = _attraction_points((last_turn or {}).get("tool_results") or [])
+    if not attractions:
+        return
+    for item in results:
+        provider = item.get("provider") if isinstance(item, dict) else getattr(item, "provider", "")
+        if provider != "amap_poi_hotel_search":
+            continue
+        data = _item_data(item)
+        hotels = list(data.get("_points") or [])
+        if not hotels:
+            continue
+        matrix, nearest_rows = [], []
+        for hotel in hotels:
+            hotel_xy = _parse_location(hotel.get("location"))
+            if not hotel_xy:
+                continue
+            distances = []
+            for attraction in attractions:
+                attraction_xy = _parse_location(attraction.get("location"))
+                if not attraction_xy:
+                    continue
+                km = round(_haversine_km(hotel_xy, attraction_xy), 2)
+                row = {"酒店": hotel.get("name", ""),
+                       "景点": attraction.get("name", ""), "直线距离公里": km}
+                matrix.append(row)
+                distances.append(row)
+            if distances:
+                distances.sort(key=lambda row: row["直线距离公里"])
+                nearest = distances[:3]
+                nearest_rows.append("%s：%s" % (
+                    hotel.get("name", ""),
+                    "、".join("%s（直线约%.2f公里）" % (
+                        row["景点"], row["直线距离公里"]) for row in nearest)))
+        data["酒店距离"] = nearest_rows
+        data["_distance_matrix"] = matrix
+        data["距离说明"] = "按经纬度计算直线距离，未计道路、交通方式和通勤时间"
+        if isinstance(item, dict):
+            item["data"] = data
+        else:
+            item.data = data
+
+
 def call_tools(state):
     """调用外部工具，并把成功的工具结果转成同构证据。"""
     t0 = time.perf_counter()
     intents = _intents_of(state)
     slots = state.get("slots") or {}
     results = registry.run_for_intents(intents, slots)
+    _annotate_hotel_distances(results, state.get("last_turn") or {})
     tool_evidence = registry.to_evidence(results)
     notes = registry.unavailable_notes(results)
     summaries = []
@@ -998,6 +1185,80 @@ def _number_citations(text: str, citations: list) -> tuple:
     return _HEX_ID_RE.sub(repl, text), used
 
 
+def _quality_limitations(state: dict, used_citations: list) -> list:
+    """程序级固定补充限制说明，避免模型因长度限制省略 PRD 要求的边界。"""
+    lines = []
+
+    def mark(provider: str) -> str:
+        cite = next((c for c in used_citations or [] if c.get("provider") == provider), None)
+        return " [%s]" % cite.get("index") if cite and cite.get("index") else ""
+
+    tools = [item for item in (state.get("tool_results") or [])
+             if item.get("status") == _INT_TOOL_OK]
+    has_transit = has_poi = has_hotel = has_food = has_hotel_distance = False
+    centers = []
+    for item in tools:
+        provider = str(item.get("provider") or "")
+        data = item.get("data") or {}
+        if provider == "amap-route":
+            try:
+                distance = float(data.get("距离(公里)") or 0)
+            except (TypeError, ValueError):
+                distance = 0
+            if distance > 800:
+                lines.append("跨城驾车距离较远，不建议作为首选；高铁/航班的实时班次和余票"
+                             "请以 12306 或航空公司为准" + mark(provider) + "。")
+        elif provider == "amap_transit_route":
+            has_transit = True
+        elif provider == "amap-poi":
+            has_poi = True
+        elif provider == "amap_poi_hotel_search":
+            has_hotel = True
+            has_hotel_distance = bool(data.get("酒店距离"))
+        elif provider == "amap_poi_food_search":
+            has_food = True
+        center = data.get("检索中心") or data.get("区域")
+        if provider in ("amap-poi", "amap_poi_hotel_search", "amap_poi_food_search"):
+            if center and center not in centers:
+                centers.append(center)
+    if has_transit:
+        lines.append("公交/地铁内容是高德组合方案，不代表 12306 实时车次或余票。")
+    if centers and not (state.get("slots") or {}).get("area"):
+        lines.append("景点、住宿和餐饮默认以“%s”为检索中心；如需靠近具体景点、地铁站或商圈，"
+                     "请继续指定区域。" % "、".join(centers[:3]))
+    if has_hotel:
+        lines.append("酒店工具未返回房价、房态、评分和房型，不能据此判断性价比。")
+        if has_hotel_distance:
+            lines.append("酒店到景点使用经纬度直线距离排序，未计道路、交通方式和实际通勤时间。")
+        else:
+            lines.append("本轮没有取得酒店与行程景点的完整坐标，无法计算“谁离景点更近”。")
+    if has_food:
+        lines.append("餐饮工具未返回评分、营业时间和人均价格，餐厅出现顺序不代表口味排名。")
+    return list(dict.fromkeys(lines))
+
+
+def _hotel_distance_appendix(state: dict, used_citations: list) -> str:
+    """把酒店最近景点固定写入答案，确保“离景点更近”不依赖模型自愿转述。"""
+    rows = []
+    hotel_provider = ""
+    for item in state.get("tool_results") or []:
+        if item.get("status") != _INT_TOOL_OK:
+            continue
+        provider = str(item.get("provider") or "")
+        distances = (item.get("data") or {}).get("酒店距离") or []
+        if distances:
+            rows.extend(str(x) for x in distances[:15])
+            hotel_provider = provider
+            break
+    if not rows:
+        return ""
+    cite = next((c for c in used_citations or []
+                 if c.get("provider") == hotel_provider), None)
+    mark = " [%s]" % cite.get("index") if cite and cite.get("index") else ""
+    return ("\n\n酒店到行程景点距离（直线）：\n"
+            + "\n".join("- " + row + mark for row in rows))
+
+
 def compose(state):
     """组织答案：逐句绑定 source_id；生成失败退化为抽取式，绝不编造。"""
     t0 = time.perf_counter()
@@ -1050,6 +1311,33 @@ def compose(state):
             hint = (hint + "\n" if hint else "") + (
                 "证据按“工具/API 优先、RAG 补充”排序。实时事实以工具为准；"
                 "RAG 只补充景点、菜品、文化或一般规则，不得替代实时数值。")
+            for tool in ok_tools:
+                provider = str(tool.get("provider") or "")
+                data = tool.get("data") or {}
+                if provider == "amap-route":
+                    try:
+                        distance = float(data.get("距离(公里)") or 0)
+                    except (TypeError, ValueError):
+                        distance = 0
+                    if distance > 800:
+                        hint = (hint + "\n" if hint else "") + (
+                            "本轮驾车距离超过 800 公里，不得把驾车列为首选；"
+                            "应提示用户优先比较铁路或航班，没有实时车次/余票时明确要求查 12306/航司。")
+                if provider == "amap_transit_route":
+                    hint = (hint + "\n" if hint else "") + (
+                        "公交/地铁结果只是高德组合方案，不代表 12306 实时车次与余票，必须如实说明。")
+                if provider in ("amap_poi_hotel_search", "amap_poi_food_search", "amap-poi"):
+                    center = data.get("检索中心") or data.get("区域") or data.get("城市")
+                    radius = data.get("检索半径")
+                    if center:
+                        hint = (hint + "\n" if hint else "") + (
+                            "本轮 POI 检索中心是“%s”%s；答案要明确这是默认参考区域，"
+                            "用户若要其他商圈/落脚点可继续指定。"
+                            % (center, ("，半径约 " + str(radius)) if radius else ""))
+                if provider == "amap_poi_hotel_search" and data.get("酒店距离"):
+                    hint = (hint + "\n" if hint else "") + (
+                        "回答住宿时要利用“酒店距离”，按到上一轮行程景点的最近直线距离说明便利性；"
+                        "同时明确这是直线距离，不是驾车或公共交通耗时。")
             if len(tasks) > 1:
                 sections = "、".join(
                     "%s（%s）" % (task.get("query"), task.get("intent"))
@@ -1057,7 +1345,7 @@ def compose(state):
                 )
                 hint = (hint + "\n" if hint else "") + (
                     "这是复合请求，必须逐项回答，不能只回答第一个问题。任务顺序：%s。"
-                    "不同任务的事实分别绑定各自证据。" % sections
+                    "不同任务的事实分别绑定各自证据，并在最后给出简短的“限制与待确认”。" % sections
                 )
             if any(task.get("intent") == Intent.HOTEL.value for task in tasks):
                 hint = (hint + "\n" if hint else "") + (
@@ -1119,6 +1407,12 @@ def compose(state):
     total = len(kept) + len(dropped) + len(unbound)
     rate = round(len(kept) / total, 4) if total else 0.0
     numbered, used = _number_citations("\n".join(kept), citations)
+    hotel_distance_text = _hotel_distance_appendix(state, used)
+    if hotel_distance_text and "酒店到行程景点距离" not in numbered:
+        numbered += hotel_distance_text
+    limitations = _quality_limitations(state, used)
+    if limitations and "限制与待确认" not in numbered:
+        numbered += "\n\n限制与待确认：\n" + "\n".join("- " + line for line in limitations)
     return {
         "answer": _with_notes(numbered, unavailable),
         "citations": used,
@@ -1129,7 +1423,7 @@ def compose(state):
                               status="degraded" if (degraded or dropped or unbound) else "ok",
                               detail=note or "ok",
                               kept=len(kept), dropped=len(dropped), unbound=len(unbound),
-                              binding_rate=rate)],
+                              binding_rate=rate, limitations=limitations)],
     }
 
 
@@ -1137,8 +1431,8 @@ def persist(state):
     """落盘审计轨迹（PRD 可追溯）。失败只告警，不影响本轮答案。"""
     t0 = time.perf_counter()
     previous_turn = dict(state.get("last_turn") or {})
-    if state.get("follow_up") == "explain":
-        # 连续追问时仍指向最初那轮推荐，不能把“为什么”本身覆盖成解释对象。
+    if state.get("follow_up") in ("explain", "reuse", "regenerate"):
+        # 连续追问/重述时仍指向最初那轮推荐，不能把“为什么/重复”覆盖成新对象。
         last_turn = previous_turn
     else:
         last_turn = {
@@ -1153,6 +1447,9 @@ def persist(state):
             "citations": list(state.get("citations") or []),
             "tool_results": list(state.get("tool_results") or []),
             "plan": dict(state.get("plan") or {}),
+            "degraded": bool(state.get("degraded")),
+            "evidence_binding_rate": float(state.get("evidence_binding_rate") or 0.0),
+            "completed_at": now_iso(),
         }
     user_id = (state.get("user_id") or "demo").strip() or "demo"
     append_turn(user_id, {

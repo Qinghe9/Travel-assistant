@@ -172,6 +172,20 @@ def tool_source_id(provider: str, fetched_at: str) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def _compact_tool_data(result: ToolResult) -> dict:
+    """控制进入答案上下文的候选数量，完整原结果仍保留在 tool_results 审计中。"""
+    data = {k: v for k, v in (result.data or {}).items() if not k.startswith("_")}
+    truncated = False
+    for key, limit in (("景点", 15), ("酒店", 15), ("餐饮", 15), ("方案", 15)):
+        values = data.get(key)
+        if isinstance(values, list) and len(values) > limit:
+            data[key] = values[:limit]
+            truncated = True
+    if truncated:
+        data["结果说明"] = "为控制噪声，候选最多展示 15 条"
+    return data
+
+
 def to_evidence(results: list) -> list:
     """把成功的工具结果转成证据条目（失败的不进证据池，但要如实告知用户）。"""
     from app.tools.base import readable
@@ -184,7 +198,12 @@ def to_evidence(results: list) -> list:
             "source_id": sid,
             "title": "工具：%s" % result.provider,
             "url": "",
-            "text": readable(result),
+            "text": readable(ToolResult(
+                provider=result.provider, status=result.status,
+                data=_compact_tool_data(result), message=result.message,
+                fetched_at=result.fetched_at, expires_at=result.expires_at,
+                error_code=result.error_code, latency_ms=result.latency_ms,
+            )),
             "score": 1.0,
             "updated_at": result.fetched_at,
             "source_type": "tool",

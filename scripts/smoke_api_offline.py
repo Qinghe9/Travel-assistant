@@ -236,6 +236,13 @@ with TestClient(app) as client:
         tokens = "".join(e.get("content", "") for e in events if e.get("type") == "token")
         check("模型 token 可流式输出", "token" in types, str(types[-6:]))
         check("token 拼接成完整答案", SID in tokens, tokens[:50])
+        stream_final = next((e for e in events if e.get("type") == "final"), {})
+        check("final 记录 TTFT 与总流耗时",
+              isinstance(stream_final.get("ttft_ms"), int)
+              and stream_final.get("ttft_ms") >= 0
+              and isinstance(stream_final.get("latency_ms"), int)
+              and stream_final.get("latency_ms") >= stream_final.get("ttft_ms"),
+              "%s / %s" % (stream_final.get("ttft_ms"), stream_final.get("latency_ms")))
     finally:
         agent_llm.available, agent_llm.chat_stream, agent_llm.chat_json = (
             real_available, real_stream, real_chat_json)

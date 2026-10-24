@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import time
+
 
 def _split(item):
     """兼容两种产出：单模式下直接给 chunk，多模式下给 (mode, chunk)。"""
@@ -27,6 +29,8 @@ def _split(item):
 
 async def astream_answer(agent, inputs: dict, config: dict):
     """异步生成事件字典，由 SSE 层负责编码。"""
+    started_at = time.perf_counter()
+    first_token_ms = None
     thread_id = inputs.get("thread_id", "")
     trace_id = inputs.get("trace_id", "")
     yield {"type": "meta", "thread_id": thread_id, "trace_id": trace_id}
@@ -36,6 +40,8 @@ async def astream_answer(agent, inputs: dict, config: dict):
         mode, chunk = _split(item)
         if mode == "custom":
             if isinstance(chunk, dict) and chunk.get("type"):
+                if chunk.get("type") == "token" and first_token_ms is None:
+                    first_token_ms = int((time.perf_counter() - started_at) * 1000)
                 yield chunk
         elif mode == "updates":
             for _node, update in (chunk or {}).items():
@@ -54,6 +60,8 @@ async def astream_answer(agent, inputs: dict, config: dict):
         "thread_id": thread_id,
         "user_id": final_state.get("user_id", ""),
         "trace_id": trace_id,
+        "ttft_ms": first_token_ms,
+        "latency_ms": int((time.perf_counter() - started_at) * 1000),
         "query": final_state.get("query", ""),
         "normalized_query": final_state.get("normalized_query", ""),
         "intent": final_state.get("intent", ""),
