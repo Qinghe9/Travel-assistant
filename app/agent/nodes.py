@@ -345,6 +345,11 @@ def _intents_of(state) -> list:
     return out or [_as_intent(state.get("intent"))]
 
 
+def _is_weather_provider(provider: str) -> bool:
+    name = str(provider or "").lower()
+    return name in ("open-meteo", "amap-weather", "weather") or "weather" in name
+
+
 def _is_memory_recall_query(text: str) -> bool:
     asks_history = (
         any(w in text for w in ("之前", "以前", "上次", "历史记录", "历史对话",
@@ -675,9 +680,16 @@ def classify_and_extract(state):
         merged["date"] = date_range["start_date"]
         stamp = now_iso()
     elif rule_date:
+        if intent is Intent.WEATHER:
+            for key in ("start_date", "end_date", "days"):
+                merged.pop(key, None)
         merged["date"] = rule_date
         stamp = now_iso()
     elif incoming.get("date"):
+        if (intent is Intent.WEATHER and not incoming.get("end_date")
+                and not incoming.get("days")):
+            for key in ("start_date", "end_date", "days"):
+                merged.pop(key, None)
         stamp = now_iso()
 
     # 天气没给日期时，沿用上一轮行程的天数（先规划3天、再问天气的常见路径）
@@ -1110,7 +1122,7 @@ def validate_plan(state):
                               % per_person_day)
     ok_weather = any(
         item.get("status") == _INT_TOOL_OK
-        and "weather" in str(item.get("provider") or "").lower()
+        and _is_weather_provider(item.get("provider"))
         for item in tools
     )
     if Intent.WEATHER in intents and not ok_weather:
@@ -1392,10 +1404,8 @@ def compose(state):
                    if item.get("status") != _INT_TOOL_OK]
     ok_tools = [item for item in (state.get("tool_results") or [])
                 if item.get("status") == _INT_TOOL_OK]
-    ok_weather = any(
-        "weather" in str(item.get("provider") or "").lower()
-        for item in ok_tools
-    )
+    ok_weather = any(_is_weather_provider(item.get("provider"))
+                     for item in ok_tools)
 
     # RAG 是背景补充，不能顶替实时天气。工具失败时仍如实拒答，
     # 避免把知识库里的旧天气或常识写成今天的实况。

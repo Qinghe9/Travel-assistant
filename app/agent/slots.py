@@ -129,7 +129,10 @@ def parse_budget(text: str):
     return int(m.group(1)) if m else None
 
 
-_REL_DAY = {"大后天": 3, "后天": 2, "明天": 1, "明日": 1, "今天": 0, "今日": 0}
+_REL_DAY = {
+    "大后天": 3, "后天": 2, "明天": 1, "明日": 1,
+    "今天": 0, "今日": 0, "当天": 0, "当日": 0,
+}
 
 
 def parse_date(text: str):
@@ -160,6 +163,9 @@ _RANGE_WEEK_REL = re.compile(r"(?:最近|未来|接下来|今后)\s*(?:一|1|两
 _RANGE_WEEK_THIS = re.compile(r"(?:本|这)\s*(?:一|1)?\s*(?:个)?\s*(?:星期|周|礼拜)")
 _RANGE_WEEK_NEXT = re.compile(r"下\s*(?:一|1)?\s*(?:个)?\s*(?:星期|周|礼拜)")
 _RANGE_WEEK_N = re.compile(r"([0-9一二两]{1,2})\s*(?:个)?\s*(?:星期|周|礼拜)")
+_RANGE_BEFORE_MD = re.compile(
+    r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?\s*之前")
+_RANGE_BEFORE_DAY = re.compile(r"(\d{1,2})\s*[日号]\s*之前")
 
 
 def _range_of(start, end):
@@ -199,6 +205,35 @@ def parse_date_range(text: str):
         weeks = _to_int(m.group(1))
         if weeks and 1 <= weeks <= 2:
             return _range_of(today, today + _dt.timedelta(days=weeks * 7 - 1))
+
+    # “10月31日之前/31号之前”按今天至目标日前一天理解（不包含目标日）。
+    m = _RANGE_BEFORE_MD.search(q)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        year = today.year
+        try:
+            target = _dt.date(year, month, day)
+            if target < today:
+                target = _dt.date(year + 1, month, day)
+        except ValueError:
+            return None
+        end = target - _dt.timedelta(days=1)
+        if end >= today:
+            return _range_of(today, end)
+
+    m = _RANGE_BEFORE_DAY.search(q)
+    if m:
+        day = int(m.group(1))
+        try:
+            target = _dt.date(today.year, today.month, day)
+            if target < today:
+                next_month = today.replace(day=28) + _dt.timedelta(days=4)
+                target = next_month.replace(day=day)
+        except ValueError:
+            return None
+        end = target - _dt.timedelta(days=1)
+        if end >= today:
+            return _range_of(today, end)
 
     m = _RANGE_DAY.search(q)
     if m:

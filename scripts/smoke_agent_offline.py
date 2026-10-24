@@ -233,6 +233,14 @@ _next = slot_lib.parse_date_range("下周")
 check("下周从周一开始", bool(_next)
       and _dt.date.fromisoformat(_next["start_date"]).weekday() == 0
       and _next.get("days") == 7, str(_next))
+_before = slot_lib.parse_date_range("帮我查无锡31号之前所有天气预报")
+_expected_before_end = _dt.date(_dt.date.today().year, _dt.date.today().month, 31) - _dt.timedelta(days=1)
+check("31号之前解析为截至前一天",
+      bool(_before) and _before.get("end_date") == _expected_before_end.isoformat(),
+      str(_before))
+check("当天解析为今天",
+      slot_lib.parse_date("帮我查当天的天气，无锡") == _dt.date.today().isoformat(),
+      str(slot_lib.parse_date("帮我查当天的天气，无锡")))
 check("天河区抽取", slot_lib.parse_area("广州天河区附近有什么住宿酒店", "广州") == "天河区",
       str(slot_lib.parse_area("广州天河区附近有什么住宿酒店", "广州")))
 check("商圈抽取", slot_lib.parse_area("珠江新城附近酒店") == "珠江新城",
@@ -252,6 +260,15 @@ check("追问回答补全日期区间", not (s_pending.get("missing") or []), st
 check("区间槽位写入", (s_pending.get("slots") or {}).get("days") == 3
       and bool((s_pending.get("slots") or {}).get("end_date")),
       str(s_pending.get("slots")))
+
+_single_thread = "weather-single-date"
+run("帮我规划3天杭州行程", _single_thread)
+_s_today = run("帮我查当天天气，无锡", _single_thread)
+check("当天天气清除旧的三天区间",
+      (_s_today.get("slots") or {}).get("date") == _dt.date.today().isoformat()
+      and "days" not in (_s_today.get("slots") or {})
+      and "end_date" not in (_s_today.get("slots") or {}),
+      str(_s_today.get("slots")))
 
 # 0e) Jev 决策路由：覆盖意图、写入紧急度；失败自动回退
 from app.agent import jev as jev_mod  # noqa: E402
@@ -874,6 +891,17 @@ check("工具证据进入引用", any(c.get("kind") == "tool" for c in (s.get("c
 check("答案绑定工具引用",
       re.search(r"\[\d+\]", s.get("answer") or "") is not None,
       (s.get("answer") or "")[:60])
+
+
+class _OpenMeteoProvider(_OkProvider):
+    name = "open-meteo"
+
+
+s = with_provider(_OpenMeteoProvider(), "明天北京天气怎么样")
+check("open-meteo 成功结果不会被误判失败",
+      s.get("no_evidence") is False
+      and "无法作答" not in (s.get("answer") or ""),
+      (s.get("answer") or "")[:80])
 
 # 5b) 工具不可用时：明确说明，且绝不编造实时数据
 s = with_provider(_DownProvider(), "明天北京天气怎么样")
