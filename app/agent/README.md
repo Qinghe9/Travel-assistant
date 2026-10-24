@@ -58,13 +58,13 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 | 节点 | 做什么 | 失败策略 |
 |---|---|---|
 | `normalize_input` | 取本轮问题、归一化，并清空上一轮临时字段 | 空输入直接提示 |
-| `classify_and_extract` | 意图 + 槽位；高置信 Jev + 完整规则槽位时跳过主 LLM | 失败降级为规则式，不阻断 |
+| `classify_and_extract` | 单意图或复合意图 + 槽位；拆分“交通？住宿？”等请求 | 失败降级为规则式，不阻断 |
 | `route` | 第一跳：ask / chat / tools / explain | 未知意图进兜底 |
-| `call_tools` | 同一意图下工具并行；高德共享地理编码缓存与 QPS 限速 | 超时/熔断/无凭据 → unavailable |
+| `call_tools` | 汇总所有子意图所需工具并并行执行 | 超时/熔断/无凭据 → unavailable |
 | `retrieve` | 工具执行完成后补充 RAG，只追加证据，不覆盖 API 结果 | RAG 不可用则保留已有工具证据 |
 | `validate_plan` | 冲突检查（缺天数、预算过低、天气非工具来源） | 只报可核实的冲突 |
 | `compose` | 逐句绑定 `[source_id]` 作答 | 生成失败 → 抽取式兜底 |
-| `persist` | 轨迹落盘（JSONL） | 落盘失败不影响本轮答案 |
+| `persist` | 轨迹落盘，并把完整用户可见轮次写入跨会话记忆 | 失败不影响本轮答案 |
 
 分支节点：`ask_clarify`（缺槽追问）、`chat`（闲聊兜底）、`explain`（解释上一轮推荐依据）。
 
@@ -72,14 +72,31 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 存进 `last_turn`；用户随后问“为什么选这些酒店/依据是什么”时，直接进入 `explain` 节点解释筛选
 范围、排序方式与数据局限，连续追问也不会覆盖最初的推荐对象。
 
+复合请求会写入 `tasks`：例如“怎么从顺德去广州？应该在哪里住？”会拆成
+`INT-03 交通 + INT-04 住宿`，两类工具同时调用，生成答案时要求逐项回答，不能只答第一问。
+
 ## 状态字段
 
-`thread_id` / `messages`（追加）/ `query` / `intent` / `confidence` / `slots` / `missing`
+`thread_id` / `messages`（追加）/ `query` / `intent` / `intents` / `tasks` / `confidence` / `slots` / `missing`
 / `evidence` / `citations` / `evidence_meta` / `tool_results` / `plan` / `answer`
 / `degraded` / `no_evidence` / `evidence_binding_rate` / `follow_up` / `last_turn` / `trace`（追加）
 
 `messages` 与 `trace` 用 `operator.add` 追加；其余字段每轮覆盖
 （`normalize_input` 会主动清空上一轮的证据类字段，避免多轮用到过期证据）。
+
+## 跨会话长期记忆
+
+同一个稳定 `user_id` 下保存两类数据：
+
+- 用户画像：偏好、预算、人数、上次目的地、上次出发城市、最近关注城市；
+- 完整对话记录：每轮的 query、answer、意图/任务、槽位、引用、工具结果、thread、trace 和时间。
+
+新会话不只读取画像，还会从历史记录中选最近轮次和与当前城市相关的轮次作为上下文。
+记忆永远不是事实证据，不给记忆内容标注 `source_id`；实时事实仍必须来自本轮工具或 RAG。
+
+浏览器 `localStorage` 里已有的旧会话会在打开 `/demo` 时通过
+`POST /api/v1/memory/import` 幂等补录。`GET /api/v1/profile/{user_id}/memory`
+可导出全部跨会话轮次，`DELETE /api/v1/profile/{user_id}` 会同时清空画像与全部历史。
 
 ## 证据绑定
 
@@ -124,7 +141,7 @@ python scripts/smoke_agent_offline.py
 |---|---|---|
 | `AGENT_MEMORY` | `sqlite` | `sqlite` 跨进程保留；`memory` 仅进程内 |
 | `AGENT_DB_PATH` | `data/agent/agent.db` | SQLite 会话库 |
-| `AGENT_PROFILE_DB` | `data/agent/profile.db` | 长期偏好库（按 user_id） |
+| `AGENT_PROFILE_DB` | `data/agent/profile.db` | 长期画像与完整跨会话轮次（按 user_id） |
 | `AGENT_DATE_TTL_HOURS` | `24` | 日期槽位多久未更新就清空 |
 | `AGENT_TRACE_LOG` | `data/agent/traces.jsonl` | 轨迹落盘位置 |
 | `AGENT_TRACE_ENABLED` | `1` | 关掉则不写轨迹 |

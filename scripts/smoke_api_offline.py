@@ -100,6 +100,8 @@ with TestClient(app) as client:
     check("调试台 /demo 可访问",
           r.status_code == 200 and "开启新对话" in r.text and "给助手发送消息" in r.text,
           str(r.status_code))
+    check("调试台会补录本地旧会话", "syncLocalMemory" in r.text
+          and "/api/v1/memory/import" in r.text, "")
     r = client.get("/static/coast.jpg")
     check("氛围底图可访问", r.status_code == 200 and "image" in r.headers.get("content-type", ""),
           r.headers.get("content-type", ""))
@@ -171,6 +173,44 @@ with TestClient(app) as client:
     r3 = client.get("/api/v1/profile/u-long")
     check("GET /profile 可查", "历史文化" in ((r3.json() or {}).get("profile") or {}).get("preferences", []),
           str(r3.status_code))
+    profile_body = r3.json() or {}
+    check("GET /profile 显示完整记忆数", profile_body.get("memory_turns", 0) >= 2,
+          str(profile_body.get("memory_turns")))
+    r4 = client.get("/api/v1/profile/u-long/memory")
+    memory_body = r4.json() or {}
+    check("GET /profile/{user}/memory 导出全部轮次",
+          r4.status_code == 200 and memory_body.get("count", 0) >= 2
+          and all(t.get("query") and t.get("answer") for t in memory_body.get("turns") or []),
+          str(r4.status_code))
+    r5 = client.post("/api/v1/chat", json={
+        "message": "从之前的对话记录，知道我想去哪里玩吗？", "user_id": "u-long",
+        "thread_id": "long-new-thread", "stream": False})
+    recalled = (r5.json() or {}).get("answer") or ""
+    check("API 新 thread 能回忆目的地", "西安" in recalled, recalled[:60])
+    r6 = client.post("/api/v1/chat", json={
+        "message": "帮我规划最近三天行程", "user_id": "u-long",
+        "thread_id": "long-plan-without-city", "stream": False})
+    inherited = ((r6.json() or {}).get("slots") or {}).get("destination")
+    check("API 新 thread 自动沿用目的地", inherited == "西安", str(inherited))
+    client.delete("/api/v1/profile/u-import")
+    payload = {"user_id": "u-import", "conversations": [{
+        "id": "legacy-thread", "threadId": "legacy-thread", "updatedAt": 1761312000000,
+        "messages": [
+            {"role": "user", "content": "我想去广州玩", "at": 1761312000000},
+            {"role": "assistant", "content": "可以安排广州行程。", "traceId": "legacy-trace",
+             "citations": [], "at": 1761312001000},
+        ],
+    }]}
+    r7 = client.post("/api/v1/memory/import", json=payload)
+    check("本地旧会话可补录为长期记忆",
+          (r7.json() or {}).get("imported") == 1
+          and (r7.json() or {}).get("memory_turns") == 1,
+          str(r7.json()))
+    r8 = client.post("/api/v1/memory/import", json=payload)
+    check("旧会话重复同步不重复写入",
+          (r8.json() or {}).get("imported") == 0
+          and (r8.json() or {}).get("memory_turns") == 1,
+          str(r8.json()))
 
     # 假模型：验证 token 事件真的能从节点里流出来
     from app.agent import llm as agent_llm

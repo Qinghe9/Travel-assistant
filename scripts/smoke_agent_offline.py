@@ -113,11 +113,13 @@ _base_get_provider = tool_registry.get_provider
 tool_registry.get_provider = lambda name: _StubProvider()
 
 
-def run(text, thread=None):
+def run(text, thread=None, user_id=None):
     """跑一轮。不指定 thread 就新建一个，避免不同用例互相污染上下文。"""
     thread = thread or ("smoke-" + uuid.uuid4().hex[:8])
-    return graph.invoke({"messages": [{"role": "user", "content": text}], "thread_id": thread},
-                        {"configurable": {"thread_id": thread}})
+    inputs = {"messages": [{"role": "user", "content": text}], "thread_id": thread}
+    if user_id:
+        inputs["user_id"] = user_id
+    return graph.invoke(inputs, {"configurable": {"thread_id": thread}})
 
 
 def nodes_of(state):
@@ -131,6 +133,8 @@ check("中文天数解析", slot_lib.parse_days("帮我规划三天西安行程"
       str(slot_lib.parse_days("帮我规划三天西安行程")))
 check("相对日期解析", slot_lib.parse_date("明天北京天气") is not None, "")
 check("不猜测缺失日期", slot_lib.parse_date("北京天气怎么样") is None, "")
+_split = slot_lib.split_subqueries("怎么从顺德去广州？应该在哪里住？")
+check("复合问题拆分", _split == ["怎么从顺德去广州", "应该在哪里住"], str(_split))
 
 # 0b) 日期过期策略
 import datetime as _dt  # noqa: E402
@@ -273,6 +277,20 @@ check("酒店先工具后补充 RAG",
 check("酒店不再调用 travelport", "travelport" not in str(_s_hotel.get("tool_results")),
       str(_s_hotel.get("tool_results"))[:80])
 
+# 0f-2) 一次请求包含交通 + 住宿，两个意图都必须进入状态和工具编排
+_s_multi = run("怎么从顺德去广州？应该在哪里住？")
+check("复合请求识别两个意图",
+      _s_multi.get("intents") == ["INT-03", "INT-04"],
+      str(_s_multi.get("intents")))
+check("复合请求生成两个任务",
+      len(_s_multi.get("tasks") or []) == 2
+      and all(not (task.get("missing") or []) for task in _s_multi.get("tasks") or []),
+      str(_s_multi.get("tasks")))
+check("复合请求调用多个工具",
+      "call_tools" in nodes_of(_s_multi)
+      and len(_s_multi.get("tool_results") or []) >= 2,
+      str([item.get("provider") for item in _s_multi.get("tool_results") or []]))
+
 # 0g) RAG 向量缓存跨线程（修复 SqliteSaver 之外的 SQLite 报错）
 from app.rag.indexing.embed import EmbedCache  # noqa: E402
 _cache_path = Path(tempfile.gettempdir()) / "embed_cache_thread_test.sqlite"
@@ -376,6 +394,37 @@ tool_registry.get_provider = lambda name: _StubProvider()
 _food_pick = nodes._evidence_for_prompt({"intent": "INT-05", "evidence": _ev_kb + _ev_tool})
 _food_ids = [e["source_id"] for e in _food_pick]
 check("美食工具在前 RAG 在后", _food_ids == ["t1", "k0", "k1", "k2"], str(_food_ids))
+
+# 0l) 跨会话完整记忆：新 thread 仍可按同一个 user_id 延续目的地与历史
+from app.agent.store import clear_profile, load_history, load_profile  # noqa: E402
+_memory_user = "u-memory-" + uuid.uuid4().hex[:8]
+_s_seed = run("广州有哪些必去的景点", "memory-seed", _memory_user)
+_profile_after = load_profile(_memory_user)
+check("跨会话保存目的地", _profile_after.get("destination") == "广州",
+      str(_profile_after))
+_history_after = load_history(_memory_user)
+check("跨会话保存完整轮次",
+      len(_history_after) == 1
+      and _history_after[0].get("query") == "广州有哪些必去的景点"
+      and bool(_history_after[0].get("answer"))
+      and _history_after[0].get("trace_id"),
+      str(_history_after[-1])[:120] if _history_after else "[]")
+_s_recall = run("从之前的对话记录，知道我想去哪里玩吗？", "memory-new-thread", _memory_user)
+check("新会话能回忆目的地",
+      "广州" in (_s_recall.get("answer") or "")
+      and "chat" in nodes_of(_s_recall),
+      (_s_recall.get("answer") or "")[:80])
+_s_follow_city = run("帮我规划最近三天行程", "memory-plan-thread", _memory_user)
+check("新会话自动沿用目的地",
+      (_s_follow_city.get("slots") or {}).get("destination") == "广州"
+      and "ask_clarify" not in nodes_of(_s_follow_city),
+      str(_s_follow_city.get("slots")))
+check("第二轮也写入长期历史", len(load_history(_memory_user)) >= 3,
+      str(len(load_history(_memory_user))))
+clear_profile(_memory_user)
+check("清除长期记忆同时清空历史",
+      load_profile(_memory_user) == {} and load_history(_memory_user) == [],
+      str(len(load_history(_memory_user))))
 
 # 1) 闲聊
 s = run("你好")

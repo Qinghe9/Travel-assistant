@@ -25,6 +25,8 @@ class AgentState(TypedDict, total=False):
 
     # 理解层（PRD FR-01）
     intent: str
+    intents: list
+    tasks: list
     confidence: float
     slots: dict
     missing: list

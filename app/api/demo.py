@@ -373,6 +373,29 @@ function loadConvs(){
 function saveConvs(){
   try { localStorage.setItem(LS_CONV, JSON.stringify(convs)); } catch (e) {}
 }
+async function syncLocalMemory(){
+  if (!convs.length) return;
+  try {
+    await fetch('/api/v1/memory/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        conversations: convs.map(c => ({
+          id: c.id,
+          threadId: c.threadId,
+          updatedAt: c.updatedAt,
+          messages: (c.messages || []).map(m => ({
+            role: m.role, content: m.content, at: m.at,
+            traceId: m.traceId, citations: m.citations || []
+          }))
+        }))
+      })
+    });
+  } catch (e) {
+    // 本地对话仍保存在 localStorage，记忆补录失败不影响聊天。
+  }
+}
 function uid(){
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g,'').slice(0,16);
   return Math.random().toString(16).slice(2,14);
@@ -791,6 +814,7 @@ sendBtn.addEventListener('click', send);
 renderHistory();
 renderChat();
 updateSendState();
+syncLocalMemory();
 </script>
 </body>
 </html>

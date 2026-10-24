@@ -137,22 +137,29 @@ def _run_one(tool_name: str, slots: dict) -> ToolResult:
                           error_code="dispatch_error")
 
 
-def run_for_intent(intent: Intent, slots: dict) -> list:
-    """并行调用同一意图下的工具，按原注册顺序返回结果。
+def run_for_intents(intents: list, slots: dict) -> list:
+    """并行调用多个意图所需的工具，按意图/注册顺序返回结果。
 
     天气、景点、路线等工具互不依赖。串行等待会把各接口延迟相加；
     并行后总耗时接近最慢的那个工具，同时仍保留每个工具的失败信息供审计。
     """
     names = []
-    for tool_name in INTENT_TOOLS.get(intent, ()):
-        missing = [k for k in TOOL_REQUIREMENTS.get(tool_name, ()) if not (slots or {}).get(k)]
-        if not missing:
-            names.append(tool_name)
+    for intent in (intents or []):
+        for tool_name in INTENT_TOOLS.get(intent, ()):
+            missing = [k for k in TOOL_REQUIREMENTS.get(tool_name, ())
+                       if not (slots or {}).get(k)]
+            if not missing and tool_name not in names:
+                names.append(tool_name)
     if not names:
         return []
     workers = min(4, len(names))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="travel-tool") as pool:
         return list(pool.map(lambda name: _run_one(name, slots), names))
+
+
+def run_for_intent(intent: Intent, slots: dict) -> list:
+    """兼容单意图调用。"""
+    return run_for_intents([intent], slots)
 
 
 def tool_source_id(provider: str, fetched_at: str) -> str:

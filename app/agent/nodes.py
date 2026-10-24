@@ -23,7 +23,14 @@ from app.agent import jev, llm, prompts, retrieval
 from app.agent import slots as slot_lib
 from app.agent.intents import INTENT_NEEDS_RETRIEVAL, SLOT_LABEL, missing_slots, route_target
 from app.agent.state import trace_event
-from app.agent.store import load_profile, profile_hint, save_profile
+from app.agent.store import (
+    append_turn,
+    load_history,
+    load_profile,
+    memory_hint,
+    profile_hint,
+    save_profile,
+)
 from app.models.schemas import Intent, LLMIntentPayload, ToolStatus, dump, now_iso
 from app.tools import registry
 
@@ -175,6 +182,93 @@ def _is_explain_followup(text: str, last_turn: dict) -> bool:
     return True
 
 
+def _multi_intent_tasks(text: str, previous: dict, profile: dict) -> tuple:
+    """拆分“交通？住宿？”这类复合请求，并为每个意图保留独立任务。"""
+    parts = slot_lib.split_subqueries(text)
+    if len(parts) < 2:
+        return [], {}
+    candidates = []
+    seen = set()
+    for part in parts:
+        intent = slot_lib.rule_intent(part)
+        if intent is Intent.CHITCHAT or intent.value in seen:
+            continue
+        seen.add(intent.value)
+        candidates.append((intent, part, slot_lib.rule_extract(part)))
+    if len(candidates) < 2:
+        return [], {}
+
+    aggregate = dict(previous or {})
+    for _intent, _part, slots in candidates:
+        aggregate = slot_lib.merge_slots(aggregate, slots, new_city=slots.get("destination"))
+    shared_city = (aggregate.get("target_city") or aggregate.get("destination")
+                   or (profile or {}).get("destination"))
+    if shared_city and not aggregate.get("destination"):
+        aggregate["destination"] = shared_city
+
+    tasks = []
+    for intent, part, slots in candidates:
+        task_slots = slot_lib.merge_slots(aggregate, slots, new_city=slots.get("destination"))
+        if shared_city and not task_slots.get("destination"):
+            task_slots["destination"] = shared_city
+        tasks.append({
+            "query": part,
+            "intent": intent.value,
+            "slots": task_slots,
+            "missing": missing_slots(intent, task_slots, part),
+        })
+    return tasks, aggregate
+
+
+def _intents_of(state) -> list:
+    values = state.get("intents") or [state.get("intent", "")]
+    out = []
+    for value in values:
+        try:
+            intent = Intent(value)
+        except Exception:
+            continue
+        if intent is not Intent.CHITCHAT and intent not in out:
+            out.append(intent)
+    return out or [_as_intent(state.get("intent"))]
+
+
+_MEMORY_QUERY_RE = re.compile(r"(之前|以前|上次|历史|记录|记得|知道).{0,16}(去哪|哪里|目的地|想玩|旅行|对话)?")
+
+
+def _memory_recall_answer(user_id: str, profile: dict, text: str) -> str:
+    """回答“你还记得我想去哪吗”；只读跨会话记忆，不访问工具/RAG。"""
+    asks_history = (_MEMORY_QUERY_RE.search(text or "")
+                    and any(w in text for w in ("之前", "以前", "上次", "历史", "记录", "记得")))
+    asks_destination = (("想去哪" in text or "目的地" in text)
+                        and ("记得" in text or "知道" in text))
+    if not (asks_history or asks_destination):
+        return ""
+    history = load_history(user_id)
+    destinations = []
+    for value in list((profile or {}).get("recent_destinations") or []):
+        if value and value not in destinations:
+            destinations.append(value)
+    destination = (profile or {}).get("destination")
+    if destination and destination not in destinations:
+        destinations.insert(0, destination)
+    if not destinations and not history:
+        return "目前还没有保存到可用的跨会话旅行记录。你可以直接告诉我想去的城市。"
+    if not destinations:
+        for row in reversed(history):
+            city = ((row.get("slots") or {}).get("destination")
+                    or slot_lib.detect_city(row.get("query") or ""))
+            if city and city not in destinations:
+                destinations.append(city)
+    if destinations:
+        return (
+            "根据跨会话保存的对话记录，你最近关注/计划去的是：%s。"
+            "目前已保存 %d 轮对话，所以新会话也可以延续这些上下文。"
+            % ("、".join(destinations[:5]), len(history))
+        )
+    return "跨会话记录里暂时没有解析出明确目的地，但已经保存了 %d 轮对话。" % len(history)
+
+
 # ---------------------------------------------------------------- 节点
 
 def normalize_input(state):
@@ -247,11 +341,14 @@ def classify_and_extract(state):
         expired = True
     history = _history_text(state)
     rule_result = _rule_result(text)
+    profile = dict(state.get("profile") or {}) or load_profile(user_id)
+    multi_tasks, multi_slots = _multi_intent_tasks(text, previous, profile)
 
-    # JevK5：先用结构化决策做意图路由（只判断，不生成文本）
+    # JevK5：单意图时先做结构化路由；复合请求由规则拆成多个任务，
+    # 不再让 Jev 只选一个意图而漏答后半句。
     jev_result = None
-    jev_note = ""
-    if jev.available():
+    jev_note = "检测到复合请求，拆分为 %d 个任务" % len(multi_tasks) if multi_tasks else ""
+    if not multi_tasks and jev.available():
         try:
             jev_result = jev.decide(jev.compose_state(history, text))
         except Exception as exc:
@@ -259,6 +356,17 @@ def classify_and_extract(state):
 
     result, source, note = None, "rule", ""
     fast_path = False
+    if multi_tasks:
+        primary = _as_intent(multi_tasks[0]["intent"])
+        result = {
+            "intent": primary,
+            "confidence": 0.95,
+            "slots": multi_slots,
+        }
+        source = "rule+multi"
+        fast_path = True
+        note = "、".join(task["intent"] for task in multi_tasks)
+
     jev_intent = jev.confident_intent(jev_result) if jev_result else None
     trust = float((jev_result or {}).get("confidence") or 0.0)
     pending = state.get("pending_intent") or ""
@@ -348,22 +456,39 @@ def classify_and_extract(state):
             stamp = now_iso()
             note = (note + "；" if note else "") + "按上一轮行程天数取天气"
 
-    # —— 长期偏好：只在用户本轮没表达偏好时补位，绝不覆盖本轮明确表达 ——
-    profile = dict(state.get("profile") or {}) or load_profile(user_id)
+    # —— 长期偏好与跨会话目的地：只补缺失值，不覆盖本轮明确表达 ——
     if not merged.get("preferences") and profile.get("preferences"):
         merged["preferences"] = list(profile["preferences"])
         note = (note + "；" if note else "") + "已套用长期偏好"
-    updates = {k: incoming[k] for k in ("preferences", "budget", "people")
+    if not merged.get("destination") and profile.get("destination"):
+        merged["destination"] = profile["destination"]
+        note = (note + "；" if note else "") + "沿用跨会话目的地"
+    if not merged.get("start_city") and profile.get("start_city"):
+        merged["start_city"] = profile["start_city"]
+
+    updates = {k: incoming[k] for k in
+               ("preferences", "budget", "people", "destination", "start_city")
                if incoming.get(k) not in (None, "", [], {})}
     if updates:
         profile = save_profile(user_id, updates)
 
-    missing = missing_slots(intent, merged, text)
+    if multi_tasks:
+        for task in multi_tasks:
+            task_slots = slot_lib.merge_slots(merged, task.get("slots") or {})
+            task["slots"] = task_slots
+            task["missing"] = missing_slots(_as_intent(task["intent"]), task_slots, task["query"])
+        missing = list(dict.fromkeys(
+            key for task in multi_tasks for key in (task.get("missing") or [])
+        ))
+    else:
+        missing = missing_slots(intent, merged, text)
     pending_out = intent.value if missing else ""
     urgent = bool(jev_result.get("urgent")) if jev_result else False
     emotion = jev_result.get("emotion") if jev_result else None
     return {
         "intent": intent.value,
+        "intents": [task["intent"] for task in multi_tasks] if multi_tasks else [intent.value],
+        "tasks": multi_tasks,
         "confidence": result["confidence"],
         "slots": merged,
         "missing": missing,
@@ -412,9 +537,24 @@ def chat(state):
     t0 = time.perf_counter()
     text = state.get("query") or ""
     answer, note = "", ""
+    user_id = (state.get("user_id") or "demo").strip() or "demo"
+    profile = dict(state.get("profile") or {}) or load_profile(user_id)
+    recalled = _memory_recall_answer(user_id, profile, text)
+    if recalled:
+        return {
+            "answer": recalled,
+            "no_evidence": False,
+            "degraded": False,
+            "trace": [trace_event("chat", _elapsed_ms(t0),
+                                  detail="从跨会话对话记录回忆目的地")],
+        }
     if llm.available():
         try:
-            res = llm.chat(prompts.chitchat_messages(_history_text(state), text),
+            context = _history_text(state)
+            remembered = memory_hint(user_id, profile, text)
+            if remembered:
+                context = (context + "\n\n" + remembered).strip()
+            res = llm.chat(prompts.chitchat_messages(context, text),
                            temperature=cfg.LLM_TEMPERATURE, max_tokens=200)
             answer = (res.get("text") or "").strip()
         except Exception as exc:
@@ -539,9 +679,9 @@ def retrieve(state):
 def call_tools(state):
     """调用外部工具，并把成功的工具结果转成同构证据。"""
     t0 = time.perf_counter()
-    intent = _as_intent(state.get("intent"))
+    intents = _intents_of(state)
     slots = state.get("slots") or {}
-    results = registry.run_for_intent(intent, slots)
+    results = registry.run_for_intents(intents, slots)
     tool_evidence = registry.to_evidence(results)
     notes = registry.unavailable_notes(results)
     summaries = []
@@ -575,8 +715,9 @@ def call_tools(state):
 
 def after_tools(state) -> str:
     """工具始终先执行；再按「智能搜索」开关补充 RAG。"""
-    intent = _as_intent(state.get("intent"))
-    if state.get("smart_search", True) and INTENT_NEEDS_RETRIEVAL.get(intent, False):
+    intents = _intents_of(state)
+    if (state.get("smart_search", True)
+            and any(INTENT_NEEDS_RETRIEVAL.get(intent, False) for intent in intents)):
         return "retrieve"
     return "validate"
 
@@ -585,13 +726,14 @@ def validate_plan(state):
     """冲突检查（PRD 第 4.1 节 validate_plan）：只报可核实的冲突，不臆断。"""
     t0 = time.perf_counter()
     intent = _as_intent(state.get("intent"))
+    intents = _intents_of(state)
     slots = state.get("slots") or {}
     evidence = state.get("evidence") or []
     tools = state.get("tool_results") or []
     ok_tools = [item for item in tools if item.get("status") == _INT_TOOL_OK]
     issues = []
 
-    if intent is Intent.ITINERARY:
+    if Intent.ITINERARY in intents:
         days = slots.get("days")
         people = slots.get("people") or 1
         budget = slots.get("budget")
@@ -602,14 +744,20 @@ def validate_plan(state):
             if per_person_day < 100:
                 issues.append("人均每日预算约 %.0f 元，明显偏低，建议放宽预算或缩短天数"
                               % per_person_day)
-    if intent is Intent.WEATHER and not ok_tools:
+    ok_weather = any(
+        item.get("status") == _INT_TOOL_OK
+        and "weather" in str(item.get("provider") or "").lower()
+        for item in tools
+    )
+    if Intent.WEATHER in intents and not ok_weather:
         issues.append("天气属于实时数据，必须来自工具；本次获取失败，不能凭知识库或常识作答")
     if not evidence and not ok_tools:
         issues.append("本轮没有取到任何可用证据")
 
     plan = {"ok": not issues, "issues": issues,
             "evidence_count": len(evidence), "tool_ok": len(ok_tools),
-            "intent": intent.value}
+            "intent": intent.value,
+            "intents": [item.value for item in intents]}
     return {"plan": plan, "trace": [trace_event("validate_plan", _elapsed_ms(t0),
                                                 status="ok" if not issues else "warn",
                                                 detail="；".join(issues) or "无冲突",
@@ -708,14 +856,19 @@ def compose(state):
     evidence = state.get("evidence") or []
     citations = state.get("citations") or []
     intent = _as_intent(state.get("intent"))
+    intents = _intents_of(state)
     unavailable = [item for item in (state.get("tool_results") or [])
                    if item.get("status") != _INT_TOOL_OK]
     ok_tools = [item for item in (state.get("tool_results") or [])
                 if item.get("status") == _INT_TOOL_OK]
+    ok_weather = any(
+        "weather" in str(item.get("provider") or "").lower()
+        for item in ok_tools
+    )
 
     # RAG 是背景补充，不能顶替实时天气。工具失败时仍如实拒答，
     # 避免把知识库里的旧天气或常识写成今天的实况。
-    if intent is Intent.WEATHER and not ok_tools:
+    if intents == [Intent.WEATHER] and not ok_weather:
         return {"answer": _with_notes(NO_EVIDENCE_ANSWER, unavailable),
                 "no_evidence": True, "degraded": True, "evidence_binding_rate": 0.0,
                 "trace": [trace_event("compose", _elapsed_ms(t0), status="degraded",
@@ -729,13 +882,35 @@ def compose(state):
 
     text, note = "", ""
     kept, dropped, unbound = [], [], []
-    picked = _evidence_for_prompt(state)
+    tasks = state.get("tasks") or []
+    picked = _evidence_for_prompt(state, limit=8 if len(tasks) > 1 else 4)
     if llm.available():
         try:
             hint = profile_hint(state.get("profile") or {})
+            remembered = memory_hint(
+                (state.get("user_id") or "demo").strip() or "demo",
+                state.get("profile") or {},
+                query,
+            )
+            if remembered:
+                hint = (hint + "\n" if hint else "") + remembered
             hint = (hint + "\n" if hint else "") + (
                 "证据按“工具/API 优先、RAG 补充”排序。实时事实以工具为准；"
                 "RAG 只补充景点、菜品、文化或一般规则，不得替代实时数值。")
+            if len(tasks) > 1:
+                sections = "、".join(
+                    "%s（%s）" % (task.get("query"), task.get("intent"))
+                    for task in tasks
+                )
+                hint = (hint + "\n" if hint else "") + (
+                    "这是复合请求，必须逐项回答，不能只回答第一个问题。任务顺序：%s。"
+                    "不同任务的事实分别绑定各自证据。" % sections
+                )
+            if any(task.get("intent") == Intent.HOTEL.value for task in tasks):
+                hint = (hint + "\n" if hint else "") + (
+                    "住宿任务必须优先完整列出本轮高德酒店工具返回的名称、区域和地址；"
+                    "RAG 中的酒店或价格只能作为后置背景，不能替代高德本轮结果。"
+                )
             if state.get("thinking"):
                 hint = (hint + "\n" if hint else "") + (
                     "用户开启了深度思考：请给出更详细的分日安排、取舍理由与注意事项；"
@@ -755,7 +930,9 @@ def compose(state):
             res = llm.chat_stream(prompts.compose_messages(
                                       _evidence_block(picked, limit=len(picked), per_chars=700),
                                       query, extra_rule=hint),
-                                  temperature=0.0, max_tokens=cfg.LLM_MAX_TOKENS,
+                                  temperature=0.0,
+                                  max_tokens=max(cfg.LLM_MAX_TOKENS, 512) if len(tasks) > 1
+                                  else cfg.LLM_MAX_TOKENS,
                                   on_token=_emit_token)
             text = res.get("text") or ""
         except Exception as exc:
@@ -810,17 +987,39 @@ def persist(state):
             "trace_id": state.get("trace_id", ""),
             "query": state.get("query", ""),
             "intent": state.get("intent", ""),
+            "intents": list(state.get("intents") or []),
+            "tasks": list(state.get("tasks") or []),
             "slots": dict(state.get("slots") or {}),
             "answer": state.get("answer", ""),
             "citations": list(state.get("citations") or []),
             "tool_results": list(state.get("tool_results") or []),
             "plan": dict(state.get("plan") or {}),
         }
+    user_id = (state.get("user_id") or "demo").strip() or "demo"
+    append_turn(user_id, {
+        "created_at": now_iso(),
+        "trace_id": state.get("trace_id", ""),
+        "thread_id": state.get("thread_id", ""),
+        "query": state.get("query", ""),
+        "answer": state.get("answer", ""),
+        "intent": state.get("intent", ""),
+        "intents": list(state.get("intents") or []),
+        "tasks": list(state.get("tasks") or []),
+        "slots": dict(state.get("slots") or {}),
+        "route_source": state.get("route_source", ""),
+        "citations": list(state.get("citations") or []),
+        "tool_results": list(state.get("tool_results") or []),
+        "plan": dict(state.get("plan") or {}),
+        "degraded": bool(state.get("degraded")),
+        "no_evidence": bool(state.get("no_evidence")),
+        "evidence_binding_rate": float(state.get("evidence_binding_rate") or 0.0),
+    })
     note = "轨迹落盘已关闭"
     if cfg.TRACE_ENABLED:
         record = {
             "trace_id": state.get("trace_id", ""),
             "thread_id": state.get("thread_id", ""),
+            "user_id": user_id,
             "query": state.get("query", ""),
             "intent": state.get("intent", ""),
             "slots": state.get("slots") or {},

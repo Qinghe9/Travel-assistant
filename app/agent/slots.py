@@ -286,10 +286,11 @@ def parse_entity(text: str, city: str = None):
 
 _INTENT_RULES = [
     (Intent.TRANSPORT, ("高铁", "火车", "动车", "航班", "飞机", "机票",
-                        "怎么去", "怎么走", "怎么坐车", "怎么坐",
+                        "怎么去", "怎么从", "怎么走", "怎么坐车", "怎么坐",
                         "地铁", "公交", "轻轨", "城际", "换乘")),
     (Intent.WEATHER, ("天气", "气温", "温度", "下雨", "下雪", "冷不冷", "热不热")),
-    (Intent.HOTEL, ("酒店", "住宿", "民宿", "宾馆", "旅馆", "住哪", "住哪里")),
+    (Intent.HOTEL, ("酒店", "住宿", "民宿", "宾馆", "旅馆", "住哪", "住哪里",
+                    "哪里住", "在哪住", "哪儿住", "住在哪")),
     (Intent.FOOD, ("美食", "小吃", "必吃", "吃什么", "好吃", "餐厅", "火锅")),
     (Intent.ITINERARY, ("规划", "行程", "安排", "路线", "几天", "几日游")),
     (Intent.DESTINATION, ("景点", "好玩", "必去", "有什么", "玩什么", "怎么玩", "值得去", "介绍")),
@@ -420,3 +421,16 @@ def normalize_text(text: str) -> str:
         else:
             out.append(ch)
     return re.sub(r"\s+", " ", "".join(out)).strip()
+
+
+_SUBQUERY_SPLIT = re.compile(
+    r"[？?！!；;\n]+"
+    r"|(?:，|,)\s*(?=(?:还有|另外|顺便|并且|同时|然后|再|应该|那))"
+)
+
+
+def split_subqueries(text: str) -> list:
+    """把一句话里的多个问题拆成独立子查询；普通单问句保持原样。"""
+    parts = [normalize_text(x).strip(" ，,。") for x in _SUBQUERY_SPLIT.split(text or "")]
+    parts = [x for x in parts if x]
+    return parts if len(parts) > 1 else [normalize_text(text)]
