@@ -13,7 +13,7 @@ from app.models.schemas import Intent
 REQUIRED_SLOTS: dict[Intent, tuple[str, ...]] = {
     Intent.DESTINATION: ("destination",),
     Intent.ITINERARY: ("destination", "days"),
-    Intent.TRANSPORT: ("start_city", "target_city", "date"),
+    Intent.TRANSPORT: ("origin", "destination_place"),
     Intent.HOTEL: ("destination",),
     Intent.FOOD: ("destination",),
     Intent.WEATHER: ("destination", "date"),
@@ -25,6 +25,8 @@ SLOT_LABEL = {
     "destination": "目的地",
     "start_city": "出发城市",
     "target_city": "到达城市",
+    "origin": "出发地",
+    "destination_place": "到达地点",
     "date": "日期（例如\u201c明天\u201d或\u201c10月20日\u201d）",
     "days": "天数",
     "people": "出行人数",
@@ -34,11 +36,11 @@ SLOT_LABEL = {
 # 每类意图要用哪些工具（PRD 第 3.2 节"工具与知识"列）
 INTENT_TOOLS: dict[Intent, tuple[str, ...]] = {
     Intent.DESTINATION: ("poi",),
-    Intent.ITINERARY: ("weather", "poi", "route"),
-    Intent.TRANSPORT: ("route", "transport"),
+    Intent.ITINERARY: ("weather", "poi", "route", "holiday", "air_quality"),
+    Intent.TRANSPORT: ("route", "transit", "transport"),
     Intent.HOTEL: ("hotel",),
-    Intent.FOOD: (),
-    Intent.WEATHER: ("weather",),
+    Intent.FOOD: ("food",),
+    Intent.WEATHER: ("weather", "air_quality"),
     Intent.CHITCHAT: (),
 }
 
@@ -56,15 +58,29 @@ INTENT_NEEDS_RETRIEVAL: dict[Intent, bool] = {
 }
 
 
-def required_of(intent: Intent) -> tuple[str, ...]:
+def required_of(intent: Intent, text: str = "") -> tuple[str, ...]:
+    """必填槽位。交通类按出行方式动态判断：
+
+    - 地铁/公交/怎么走：只要出发地和到达地点；
+    - 高铁/火车/航班：额外要求日期（票价/车次必须带日期）。
+    """
+    if intent is Intent.TRANSPORT:
+        req = list(REQUIRED_SLOTS[Intent.TRANSPORT])
+        if any(w in (text or "") for w in ("高铁", "火车", "动车", "航班", "机票")):
+            req.append("date")
+        return tuple(req)
     return REQUIRED_SLOTS.get(intent, ())
 
 
-def missing_slots(intent: Intent, slots: dict) -> list:
+def missing_slots(intent: Intent, slots: dict, text: str = "") -> list:
     """返回还缺哪些必填槽位（保持 REQUIRED_SLOTS 的顺序）。"""
     out = []
-    for key in required_of(intent):
+    for key in required_of(intent, text):
         value = (slots or {}).get(key)
+        if key == "origin" and not value:
+            value = (slots or {}).get("start_city")
+        if key == "destination_place" and not value:
+            value = (slots or {}).get("target_city")
         if value in (None, "", [], {}):
             out.append(key)
     return out

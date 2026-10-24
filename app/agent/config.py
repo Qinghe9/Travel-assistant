@@ -47,6 +47,8 @@ JEV_MODE = os.environ.get("JEV_MODE", "gateway").strip().lower()   # gateway | n
 JEV_TIMEOUT = float(os.environ.get("JEV_TIMEOUT", "5"))
 # 低于该置信度不采纳 Jev 的路由结果，回退主 LLM/规则
 JEV_MIN_CONFIDENCE = float(os.environ.get("JEV_MIN_CONFIDENCE", "0.55"))
+# 与主 LLM 结论不一致时，只有 Jev 达到该置信度才覆盖（避免 0.55~0.7 的误路由）
+JEV_TRUST_CONFIDENCE = float(os.environ.get("JEV_TRUST_CONFIDENCE", "0.75"))
 
 # 轨迹落盘（PRD 可追溯要求：每次回答都能复盘）
 TRACE_LOG = Path(os.environ.get("AGENT_TRACE_LOG", str(DATA / "agent" / "traces.jsonl")))

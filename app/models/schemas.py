@@ -84,6 +84,8 @@ class SlotBundle(BaseModel):
     destination: str | None = None
     start_city: str | None = None
     target_city: str | None = None
+    origin: str | None = None
+    destination_place: str | None = None
     date: str | None = None
     start_date: str | None = None
     end_date: str | None = None
@@ -92,6 +94,7 @@ class SlotBundle(BaseModel):
     budget: int | None = Field(None, ge=0)
     category: str | None = None
     entity: str | None = None
+    area: str | None = None
     preferences: list[str] = Field(default_factory=list)
 
 

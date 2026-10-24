@@ -25,6 +25,10 @@ SLOT_ALIASES = {
     "date": ("date", "start_date"),
     "end_date": ("end_date",),
     "entity": ("entity",),
+    "area": ("area", "entity"),
+    "origin": ("origin", "start_city"),
+    "destination_place": ("destination_place", "target_city", "destination"),
+    "keyword": ("keyword", "area", "entity"),
     "days": ("days",),
     "people": ("people",),
     "budget": ("budget",),
@@ -36,6 +40,10 @@ TOOL_REQUIREMENTS = {
     "weather": ("destination",),
     "poi": ("destination",),
     "route": ("start_city", "target_city"),
+    "transit": ("origin", "destination_place"),
+    "holiday": ("date",),
+    "air_quality": ("destination",),
+    "food": ("destination",),
     "transport": ("start_city", "target_city", "date"),
     "train": ("start_city", "target_city", "date"),
     "hotel": ("destination",),
@@ -69,12 +77,25 @@ def get_provider(name: str):
         else:
             from app.tools.route import OpenRouteService
             obj = OpenRouteService()
+    elif name == "transit":
+        from app.tools.amap import AmapTransit
+        obj = AmapTransit()
     elif name == "transport":
         from app.tools.transport import TravelportProvider
         obj = TravelportProvider("flight")
     elif name == "hotel":
-        from app.tools.transport import TravelportProvider
-        obj = TravelportProvider("hotel")
+        # 酒店改为高德 POI；不再走 Travelport（无凭据时只会一直不可用）
+        from app.tools.amap import AmapHotelPOI
+        obj = AmapHotelPOI()
+    elif name == "holiday":
+        from app.tools.showapi import ShowAPIHoliday
+        obj = ShowAPIHoliday()
+    elif name == "air_quality":
+        from app.tools.showapi import ShowAPIAirQuality
+        obj = ShowAPIAirQuality()
+    elif name == "food":
+        from app.tools.amap import AmapFoodPOI
+        obj = AmapFoodPOI()
     _INSTANCES[name] = obj
     return obj
 

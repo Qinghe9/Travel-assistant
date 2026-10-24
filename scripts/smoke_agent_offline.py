@@ -16,6 +16,7 @@ import re
 import sys
 import os
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -28,7 +29,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 # app.rag.config 的 _load_dotenv 用 setdefault，不会再把 .env 的值填回来。
 for _key in ("DEEPSEEK_API_KEY", "LLM_API_KEY", "RAG_EMBED_API_KEY", "RAG_SF_API_KEY",
              "OPENTRIPMAP_API_KEY", "ORS_API_KEY", "TRAVELPORT_CREDENTIALS", "AMAP_API_KEY",
-             "JEV_APP_KEY"):
+             "JEV_APP_KEY", "SHOWAPI_APP_KEY"):
     os.environ[_key] = ""
 os.environ["RAG_EMBED_PROVIDER"] = "local"
 os.environ["AGENT_TRACE_LOG"] = str(Path(tempfile.gettempdir()) / "agent_smoke_traces.jsonl")
@@ -159,6 +160,10 @@ _next = slot_lib.parse_date_range("下周")
 check("下周从周一开始", bool(_next)
       and _dt.date.fromisoformat(_next["start_date"]).weekday() == 0
       and _next.get("days") == 7, str(_next))
+check("天河区抽取", slot_lib.parse_area("广州天河区附近有什么住宿酒店", "广州") == "天河区",
+      str(slot_lib.parse_area("广州天河区附近有什么住宿酒店", "广州")))
+check("商圈抽取", slot_lib.parse_area("珠江新城附近酒店") == "珠江新城",
+      str(slot_lib.parse_area("珠江新城附近酒店")))
 
 _t = "weather-mem"
 run("帮我规划3天西安行程", _t)
@@ -196,7 +201,138 @@ _s_fallback = run("你好")
 check("Jev 失败自动回退", _s_fallback.get("intent") == "INT-07"
       and _s_fallback.get("route_source") != "jev",
       "%s / %s" % (_s_fallback.get("intent"), _s_fallback.get("route_source")))
+
+# 低置信度 Jev 与主 LLM 冲突时，保留主 LLM
+from types import SimpleNamespace  # noqa: E402
+from app.agent import llm as llm_mod  # noqa: E402
+_real_llm_avail, _real_llm_json = llm_mod.available, llm_mod.chat_json
+llm_mod.available = lambda: True
+llm_mod.chat_json = lambda messages, schema, **kw: (
+    SimpleNamespace(intent="INT-07", confidence=0.9, slots={}), "")
+jev_mod.decide = lambda text, timeout=None: {
+    "choice": "INT-06", "confidence": 0.59, "probabilities": {},
+    "urgent": False, "emotion": 0.2, "latency_ms": 30, "model": "stub",
+}
+_s_conflict = run("你好")
+check("Jev 低置信度不覆盖 LLM", _s_conflict.get("intent") == "INT-07",
+      "%s / %s" % (_s_conflict.get("intent"), _s_conflict.get("confidence")))
+llm_mod.available, llm_mod.chat_json = _real_llm_avail, _real_llm_json
+
 jev_mod.available, jev_mod.decide = _real_jev_available, _real_jev_decide
+
+# 0f) 酒店改走高德；不再走 Travelport
+from app.agent.intents import INTENT_TOOLS  # noqa: E402
+from app.models.schemas import Intent as _Intent  # noqa: E402
+check("INT-04 只挂 hotel 工具", INTENT_TOOLS[_Intent.HOTEL] == ("hotel",),
+      str(INTENT_TOOLS[_Intent.HOTEL]))
+tool_registry.get_provider = _base_get_provider
+_hotel_provider = tool_registry.get_provider("hotel")
+check("hotel 映射到 amap_poi_hotel_search",
+      getattr(_hotel_provider, "name", "") == "amap_poi_hotel_search",
+      getattr(_hotel_provider, "name", ""))
+tool_registry.get_provider = lambda name: _StubProvider()
+
+_s_hotel = run("广州天河区附近有什么住宿酒店")
+check("酒店意图走工具", _s_hotel.get("intent") == "INT-04" and "call_tools" in nodes_of(_s_hotel),
+      str(_s_hotel.get("intent")))
+check("酒店不再调用 travelport", "travelport" not in str(_s_hotel.get("tool_results")),
+      str(_s_hotel.get("tool_results"))[:80])
+
+# 0g) RAG 向量缓存跨线程（修复 SqliteSaver 之外的 SQLite 报错）
+from app.rag.indexing.embed import EmbedCache  # noqa: E402
+_cache_path = Path(tempfile.gettempdir()) / "embed_cache_thread_test.sqlite"
+try:
+    _cache_path.unlink()
+except FileNotFoundError:
+    pass
+_cache = EmbedCache(_cache_path)
+_worker_result = []
+
+
+def _cache_worker():
+    try:
+        _cache.put_many("m", [("k", [0.1, 0.2])])
+        out, _missing = _cache.get_many(["k"], "m")
+        _worker_result.append(len(out.get("k") or []))
+    except Exception:
+        _worker_result.append(-1)
+
+
+_thread = threading.Thread(target=_cache_worker)
+_thread.start()
+_thread.join()
+check("EmbedCache 跨线程可用", _worker_result == [2], str(_worker_result))
+
+# 0h) 公交换乘：出发地/到达地点，不强制日期
+_places = slot_lib.parse_route_places("从天河区到广州塔怎么坐地铁")
+check("公交换乘地点抽取", _places == ("天河区", "广州塔"), str(_places))
+_bus_slots = slot_lib.rule_extract("从天河区到广州塔怎么坐地铁")
+check("origin/destination_place 入槽位",
+      _bus_slots.get("origin") == "天河区"
+      and _bus_slots.get("destination_place") == "广州塔", str(_bus_slots))
+from app.agent.intents import missing_slots  # noqa: E402
+check("地铁查询不强制日期",
+      missing_slots(_Intent.TRANSPORT, _bus_slots, "从天河区到广州塔怎么坐地铁") == [],
+      str(missing_slots(_Intent.TRANSPORT, _bus_slots, "从天河区到广州塔怎么坐地铁")))
+check("高铁查询仍要求日期",
+      "date" in missing_slots(_Intent.TRANSPORT,
+                              {"origin": "广州", "destination_place": "长沙"},
+                              "广州到长沙高铁有哪些"),
+      "")
+tool_registry.get_provider = _base_get_provider
+_transit_provider = tool_registry.get_provider("transit")
+check("transit 映射到 amap_transit_route",
+      getattr(_transit_provider, "name", "") == "amap_transit_route",
+      getattr(_transit_provider, "name", ""))
+tool_registry.get_provider = lambda name: _StubProvider()
+
+_s_bus = run("从天河区到广州塔怎么坐地铁")
+check("地铁意图走工具不追问", _s_bus.get("intent") == "INT-03"
+      and "call_tools" in nodes_of(_s_bus)
+      and "ask_clarify" not in nodes_of(_s_bus),
+      str(nodes_of(_s_bus)))
+
+# 0i) ShowAPI 免费接口：节假日 / 空气质量
+from app.agent.intents import INTENT_TOOLS as _TOOLS  # noqa: E402
+check("行程挂节假日与空气质量",
+      "holiday" in _TOOLS[_Intent.ITINERARY] and "air_quality" in _TOOLS[_Intent.ITINERARY],
+      str(_TOOLS[_Intent.ITINERARY]))
+tool_registry.get_provider = _base_get_provider
+_holiday_provider = tool_registry.get_provider("holiday")
+_air_provider = tool_registry.get_provider("air_quality")
+check("holiday 映射 showapi_holiday",
+      getattr(_holiday_provider, "name", "") == "showapi_holiday",
+      getattr(_holiday_provider, "name", ""))
+check("air_quality 映射 showapi_air_quality",
+      getattr(_air_provider, "name", "") == "showapi_air_quality",
+      getattr(_air_provider, "name", ""))
+tool_registry.get_provider = lambda name: _StubProvider()
+
+# 0j) 证据优先级：工具型意图不能被 RAG 挤掉
+_ev_kb = [{"kind": "knowledge", "source_id": "k%d" % i, "text": "知识"} for i in range(3)]
+_ev_tool = [{"kind": "tool", "source_id": "t1", "text": "工具"}]
+_ev_tool2 = [{"kind": "tool", "source_id": "t2", "text": "工具2"}]
+_hotel_pick = nodes._evidence_for_prompt({"intent": "INT-04", "evidence": _ev_kb + _ev_tool})
+check("酒店只取工具证据", [e["source_id"] for e in _hotel_pick] == ["t1"],
+      str([e["source_id"] for e in _hotel_pick]))
+_weather_pick = nodes._evidence_for_prompt({"intent": "INT-06", "evidence": _ev_kb + _ev_tool})
+check("天气只取工具证据", [e["source_id"] for e in _weather_pick] == ["t1"],
+      str([e["source_id"] for e in _weather_pick]))
+_it_pick = nodes._evidence_for_prompt({"intent": "INT-02", "evidence": _ev_kb + _ev_tool + _ev_tool2})
+_it_ids = [e["source_id"] for e in _it_pick]
+check("行程混合知识+工具", "k0" in _it_ids and "t1" in _it_ids, str(_it_ids))
+
+# 0k) 美食：RAG 菜品 + 高德餐厅
+check("INT-05 挂 food 工具", _TOOLS[_Intent.FOOD] == ("food",), str(_TOOLS[_Intent.FOOD]))
+tool_registry.get_provider = _base_get_provider
+_food_provider = tool_registry.get_provider("food")
+check("food 映射 amap_poi_food_search",
+      getattr(_food_provider, "name", "") == "amap_poi_food_search",
+      getattr(_food_provider, "name", ""))
+tool_registry.get_provider = lambda name: _StubProvider()
+_food_pick = nodes._evidence_for_prompt({"intent": "INT-05", "evidence": _ev_kb + _ev_tool})
+_food_ids = [e["source_id"] for e in _food_pick]
+check("美食混合知识+工具", "k0" in _food_ids and "t1" in _food_ids, str(_food_ids))
 
 # 1) 闲聊
 s = run("你好")
@@ -220,12 +356,13 @@ check("槽位抽取完整", (s.get("slots") or {}).get("days") == 3
 check("走了检索分支", "retrieve" in nodes_of(s), str(nodes_of(s)))
 check("走了工具分支", "call_tools" in nodes_of(s), str(nodes_of(s)))
 answer = s.get("answer") or ""
-check("答案带 source_id", ("[%s]" % SID_A) in answer or ("[%s]" % SID_B) in answer, answer[:60])
+check("答案带脚注编号", "[1]" in answer or "[2]" in answer, answer[:60])
+check("正文不再出现 hex 编号", re.search(r"\[[0-9a-fA-F]{8,16}\]", answer) is None, answer[:60])
 
 fact_lines = [line for line in answer.split("\n")
               if line.strip() and not line.startswith("说明") and not line.startswith("- ")
               and not line.startswith("知识库中")]
-bound = [line for line in fact_lines if re.search(r"\[[0-9a-fA-F]{8,16}\]", line)]
+bound = [line for line in fact_lines if re.search(r"\[\d+\]", line)]
 check("每个事实句都绑定引用", fact_lines and len(bound) == len(fact_lines),
       "%d/%d" % (len(bound), len(fact_lines)))
 check("绑定率 > 0", float(s.get("evidence_binding_rate") or 0) > 0, str(s.get("evidence_binding_rate")))
@@ -282,7 +419,7 @@ check("天气调用工具", "call_tools" in nodes_of(s), str(nodes_of(s)))
 check("工具证据进入引用", any(c.get("kind") == "tool" for c in (s.get("citations") or [])),
       str(s.get("citations"))[:70])
 check("答案绑定工具引用",
-      re.search(r"\[[0-9a-fA-F]{8,16}\]", s.get("answer") or "") is not None,
+      re.search(r"\[\d+\]", s.get("answer") or "") is not None,
       (s.get("answer") or "")[:60])
 
 # 5b) 工具不可用时：明确说明，且绝不编造实时数据

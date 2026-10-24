@@ -21,7 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 # 强制离线：必须在导入 app.* 之前清密钥（app.rag.config 用 setdefault，不会回填）
 for _key in ("DEEPSEEK_API_KEY", "LLM_API_KEY", "RAG_EMBED_API_KEY", "RAG_SF_API_KEY",
              "OPENTRIPMAP_API_KEY", "ORS_API_KEY", "TRAVELPORT_CREDENTIALS", "AMAP_API_KEY",
-             "JEV_APP_KEY"):
+             "JEV_APP_KEY", "SHOWAPI_APP_KEY"):
     os.environ[_key] = ""
 os.environ["RAG_EMBED_PROVIDER"] = "local"
 os.environ["AGENT_MEMORY"] = "sqlite"
@@ -110,7 +110,7 @@ with TestClient(app) as client:
     check("POST /api/v1/chat 非流式", r.status_code == 200, str(r.status_code))
     check("返回意图与答案", body.get("intent") == "INT-02" and bool(body.get("answer")),
           str(body.get("intent")))
-    check("答案带引用", SID in (body.get("answer") or ""), (body.get("answer") or "")[:40])
+    check("答案带脚注引用", "[1]" in (body.get("answer") or ""), (body.get("answer") or "")[:40])
     trace_id = body.get("trace_id") or ""
     check("返回 trace_id", bool(trace_id), trace_id)
 

@@ -131,6 +131,17 @@ a:hover{text-decoration:underline}
        border-top-left-radius:5px;padding:12px 15px;box-shadow:0 6px 20px rgba(24,80,110,.06)}
 .process{margin:0 0 9px;font-size:11.5px;color:#7b8f99}
 .process summary{cursor:pointer;color:#5b7f92}
+sup.cite{font-size:10px;line-height:0;margin-left:1px;vertical-align:super}
+sup.cite a{color:#5b8fd6;text-decoration:none}
+sup.cite a:hover{text-decoration:underline}
+.sources{margin-top:9px;font-size:11.5px;color:#7b8f99}
+.sources summary{cursor:pointer;color:#5b7f92}
+.sources ol{margin:6px 0 0 18px;padding:0}
+.sources li{margin:2px 0;line-height:1.6;word-break:break-word}
+.sources a{color:#2f7de1;text-decoration:none}
+.sources a:hover{text-decoration:underline}
+.debug{margin-top:6px;font-size:10.5px;color:#a6b5bd}
+.debug summary{cursor:pointer;color:#a6b5bd}
 .steps{margin:7px 0 0;padding-left:11px;border-left:2px solid #e6eef2;
        display:flex;flex-direction:column;gap:3px}
 .step{font-size:11.5px;color:#7b8f99;line-height:1.55}
@@ -434,6 +445,75 @@ function welcome(){
   inner.appendChild(box);
 }
 
+function renderAnswer(bubble, text, citations){
+  bubble.textContent = '';
+  const parts = String(text || '').split(/(\\[\\d+\\])/g);
+  for (const part of parts){
+    const m = part.match(/^\\[(\\d+)\\]$/);
+    if (m){
+      const sup = document.createElement('sup');
+      sup.className = 'cite';
+      const a = document.createElement('a');
+      a.href = '#cite-' + m[1];
+      a.textContent = m[1];
+      a.title = '查看来源 ' + m[1];
+      a.addEventListener('click', () => {
+        const box = bubble.closest('.acard');
+        const src = box ? box.querySelector('.sources') : null;
+        if (src) src.open = true;
+      });
+      sup.appendChild(a);
+      bubble.appendChild(sup);
+    } else if (part){
+      bubble.appendChild(document.createTextNode(part));
+    }
+  }
+}
+
+function appendSources(card, citations){
+  const seen = new Set();
+  const list = [];
+  for (const c of (citations || [])){
+    if (!c || c.index == null || seen.has(c.index)) continue;
+    seen.add(c.index);
+    list.push(c);
+  }
+  if (!list.length) return;
+  const det = document.createElement('details');
+  det.className = 'sources';
+  const sum = document.createElement('summary');
+  sum.textContent = '来源 · ' + list.length + ' 条';
+  const ol = document.createElement('ol');
+  for (const c of list){
+    const li = document.createElement('li');
+    const anchor = document.createElement('a');
+    anchor.id = 'cite-' + c.index;
+    anchor.textContent = '[' + c.index + '] ';
+    li.appendChild(anchor);
+    const label = document.createElement('span');
+    label.textContent = c.title || c.provider || '来源';
+    li.appendChild(label);
+    if (c.url){
+      const link = document.createElement('a');
+      link.href = c.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = '  打开';
+      li.appendChild(link);
+    }
+    if (c.kind === 'tool'){
+      const meta = document.createElement('span');
+      meta.className = 'trace';
+      meta.textContent = ' · ' + (c.provider || '') + (c.fetched_at ? ' · ' + c.fetched_at : '');
+      li.appendChild(meta);
+    }
+    ol.appendChild(li);
+  }
+  det.appendChild(sum);
+  det.appendChild(ol);
+  card.appendChild(det);
+}
+
 function messageEl(msg){
   if (msg.role === 'user'){
     const row = document.createElement('div');
@@ -450,22 +530,26 @@ function messageEl(msg){
   const card = document.createElement('div'); card.className = 'acard';
   const steps = document.createElement('div'); steps.className = 'steps';
   if ((msg.steps || []).length){
+    const totalMs = (msg.steps || []).reduce((sum, s) => sum + (s.latency_ms || 0), 0);
     const det = document.createElement('details');
-    det.className = 'process'; det.open = true;
+    det.className = 'process'; det.open = false;
     const sum = document.createElement('summary');
-    sum.textContent = '执行过程 · ' + msg.steps.length + ' 步';
+    sum.textContent = '执行过程 · ' + msg.steps.length + ' 步 · 总耗时 '
+      + (totalMs / 1000).toFixed(1) + 's';
     det.appendChild(sum); det.appendChild(steps);
     for (const s of msg.steps){
       const line = document.createElement('div');
       line.className = 'step';
-      line.textContent = s.label || nodeLabel(s.node);
+      line.textContent = (s.label || nodeLabel(s.node))
+        + (s.latency_ms != null ? ' · ' + s.latency_ms + 'ms' : '');
       steps.appendChild(line);
     }
     card.appendChild(det);
   }
   const bubble = document.createElement('div'); bubble.className = 'bubble';
-  bubble.textContent = msg.content || '';
+  renderAnswer(bubble, msg.content || '', msg.citations || []);
   card.appendChild(bubble);
+  appendSources(card, msg.citations || []);
   if (msg.error){
     const err = document.createElement('div'); err.className = 'error';
     const strong = document.createElement('strong'); strong.textContent = '请求失败';
@@ -473,9 +557,11 @@ function messageEl(msg){
     err.appendChild(strong); err.appendChild(pre); card.appendChild(err);
   }
   if (msg.traceId){
+    const det = document.createElement('details'); det.className = 'debug';
+    const sum = document.createElement('summary'); sum.textContent = '调试信息';
     const tr = document.createElement('div'); tr.className = 'trace';
     tr.textContent = 'trace: ' + msg.traceId + (msg.threadId ? ' · thread: ' + msg.threadId : '');
-    card.appendChild(tr);
+    det.appendChild(sum); det.appendChild(tr); card.appendChild(det);
   }
   row.appendChild(who); row.appendChild(card);
   return row;
@@ -521,20 +607,22 @@ function appendAssistant(){
   row.className = 'row assistant';
   const who = document.createElement('div'); who.className = 'who'; who.textContent = '助手';
   const card = document.createElement('div'); card.className = 'acard';
-  const det = document.createElement('details'); det.className = 'process'; det.open = true;
-  const sum = document.createElement('summary'); sum.textContent = '执行过程 · 0 步';
+  const det = document.createElement('details'); det.className = 'process'; det.open = false;
+  const sum = document.createElement('summary'); sum.textContent = '执行过程 · 0 步 · 总耗时 0.0s';
   const steps = document.createElement('div'); steps.className = 'steps';
   det.appendChild(sum); det.appendChild(steps); card.appendChild(det);
   const bubble = document.createElement('div'); bubble.className = 'bubble';
   card.appendChild(bubble);
   const err = document.createElement('div'); err.className = 'error'; err.style.display = 'none';
   card.appendChild(err);
+  const debug = document.createElement('details'); debug.className = 'debug';
+  const debugSum = document.createElement('summary'); debugSum.textContent = '调试信息';
   const trace = document.createElement('div'); trace.className = 'trace';
-  card.appendChild(trace);
+  debug.appendChild(debugSum); debug.appendChild(trace); card.appendChild(debug);
   row.appendChild(who); row.appendChild(card);
   inner.appendChild(row);
   scrollBottom();
-  return { det, sum, steps, bubble, err, trace };
+  return { card, det, sum, steps, bubble, err, trace, totalMs: 0 };
 }
 
 function addStep(refs, node, ms, detail){
@@ -544,7 +632,9 @@ function addStep(refs, node, ms, detail){
   const d = detail ? ' — ' + detail : '';
   line.textContent = nodeLabel(node) + t + d;
   refs.steps.appendChild(line);
-  refs.sum.textContent = '执行过程 · ' + refs.steps.children.length + ' 步';
+  refs.totalMs = (refs.totalMs || 0) + (ms || 0);
+  refs.sum.textContent = '执行过程 · ' + refs.steps.children.length + ' 步 · 总耗时 '
+    + (refs.totalMs / 1000).toFixed(1) + 's';
   scrollBottom();
 }
 
@@ -593,7 +683,8 @@ async function send(){
   appendUser(text);
   input.value = ''; autoGrow();
 
-  const msg = { role: 'assistant', content: '', steps: [], traceId: '', threadId: conv.threadId, error: '' };
+  const msg = { role: 'assistant', content: '', steps: [], citations: [],
+                traceId: '', threadId: conv.threadId, error: '' };
   conv.messages.push(msg);
   const refs = appendAssistant();
   const caret = document.createElement('span');
@@ -646,7 +737,9 @@ async function send(){
           scrollBottom();
         } else if (evt.type === 'final'){
           if (evt.answer) msg.content = evt.answer;
-          refs.bubble.textContent = msg.content;
+          msg.citations = evt.citations || [];
+          renderAnswer(refs.bubble, msg.content, msg.citations);
+          appendSources(refs.card, msg.citations);
           if (evt.profile) setPrefs(evt.profile);
           finished = true;
         } else if (evt.type === 'error'){

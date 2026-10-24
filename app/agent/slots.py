@@ -213,16 +213,23 @@ def parse_date_range(text: str):
     return None
 
 
-def parse_route(text: str):
-    """解析「从 A 到 B」/「A 到 B」的出发与到达城市。"""
-    m = re.search(r"从\s*([\u4e00-\u9fff]{2,10}?)\s*(?:到|去|飞往|前往)\s*([\u4e00-\u9fff]{2,10})", text)
+def parse_route_places(text: str):
+    """解析「从 A 到 B」/「A 到 B」的原始出发地、到达地（可为城市或具体地点）。"""
+    q = text or ""
+    m = re.search(r"从\s*([\u4e00-\u9fffA-Za-z0-9]{2,12}?)\s*(?:到|去|飞往|前往)\s*"
+                  r"([\u4e00-\u9fffA-Za-z0-9]{2,12}?)(?=怎么|如何|坐|的|有|多少|多久|$)", q)
     if not m:
-        m = re.search(r"([\u4e00-\u9fff]{2,10}?)\s*到\s*([\u4e00-\u9fff]{2,8}?)(?=[的怎有高火动飞机]|$)", text)
+        m = re.search(r"([\u4e00-\u9fffA-Za-z0-9]{2,12}?)\s*到\s*"
+                      r"([\u4e00-\u9fffA-Za-z0-9]{2,10}?)(?=[的怎有高火动飞机地]|$)", q)
     if not m:
         return None, None
-    start = detect_city(m.group(1))
-    target = detect_city(m.group(2))
-    return start, target
+    return m.group(1).strip(), m.group(2).strip()
+
+
+def parse_route(text: str):
+    """解析出发/到达城市（能识别城市时）。"""
+    origin, dest = parse_route_places(text)
+    return detect_city(origin), detect_city(dest)
 
 
 _CATEGORY_WORDS = [
@@ -278,7 +285,9 @@ def parse_entity(text: str, city: str = None):
 
 
 _INTENT_RULES = [
-    (Intent.TRANSPORT, ("高铁", "火车", "动车", "航班", "飞机", "机票", "怎么去", "怎么走", "怎么坐车")),
+    (Intent.TRANSPORT, ("高铁", "火车", "动车", "航班", "飞机", "机票",
+                        "怎么去", "怎么走", "怎么坐车", "怎么坐",
+                        "地铁", "公交", "轻轨", "城际", "换乘")),
     (Intent.WEATHER, ("天气", "气温", "温度", "下雨", "下雪", "冷不冷", "热不热")),
     (Intent.HOTEL, ("酒店", "住宿", "民宿", "宾馆", "旅馆", "住哪", "住哪里")),
     (Intent.FOOD, ("美食", "小吃", "必吃", "吃什么", "好吃", "餐厅", "火锅")),
@@ -303,8 +312,25 @@ def rule_intent(text: str) -> Intent:
     return Intent.CHITCHAT
 
 
-SLOT_FIELDS = ("destination", "start_city", "target_city", "date", "start_date", "end_date",
-               "days", "people", "budget", "category", "entity", "preferences")
+SLOT_FIELDS = ("destination", "start_city", "target_city", "origin", "destination_place",
+               "date", "start_date", "end_date", "days", "people", "budget",
+               "category", "entity", "area", "preferences")
+
+
+def parse_area(text: str, city: str = None):
+    """抽取区域/商圈：天河区、珠江新城、西湖附近。"""
+    q = text or ""
+    if city:
+        q = q.replace(city, "", 1)
+    m = re.search(r"([\u4e00-\u9fff]{2,12}?(?:区|县|镇|街道|商圈|开发区|新区))", q)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"([\u4e00-\u9fff]{2,12}?)(?:附近|周边|一带|周围)", q)
+    if m:
+        cand = re.sub(r"^(请问|想找|找|在|去)", "", m.group(1).strip())
+        if cand and cand not in ("酒店", "住宿", "宾馆", "民宿", "这里", "那边"):
+            return cand
+    return None
 
 
 def rule_extract(text: str) -> dict:
@@ -312,7 +338,12 @@ def rule_extract(text: str) -> dict:
     text = text or ""
     out = {}
     start, target = parse_route(text)
+    origin_raw, dest_raw = parse_route_places(text)
     city = detect_city(text)
+    if origin_raw:
+        out["origin"] = origin_raw
+    if dest_raw:
+        out["destination_place"] = dest_raw
     if start:
         out["start_city"] = start
     if target:
@@ -320,6 +351,9 @@ def rule_extract(text: str) -> dict:
     destination = target or city
     if destination:
         out["destination"] = destination
+    area = parse_area(text, destination)
+    if area:
+        out["area"] = area
     date_range = parse_date_range(text)
     if date_range:
         out.update(date_range)

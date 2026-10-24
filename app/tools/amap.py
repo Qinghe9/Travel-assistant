@@ -111,6 +111,136 @@ class AmapPOI(Provider):
         }, "获取成功", ttl=self.ttl)
 
 
+class AmapHotelPOI(Provider):
+    """酒店/住宿 POI 搜索：先地理编码区域，再周边检索。
+
+    高德类型码（实测）：
+        100000 住宿服务（大类）
+        100100 宾馆酒店
+        100200 旅馆招待所
+    注意：网传的 141201 实际属于科教文化类，会返回大学，不能用于酒店。
+    """
+
+    name = "amap_poi_hotel_search"
+    ttl = 3600
+    timeout = 4.0
+
+    def fetch(self, city: str = None, area: str = None, keyword: str = None):
+        if not api_key():
+            return make_unavailable(self.name, "未配置 AMAP_API_KEY，酒店接口暂不可用",
+                                    "no_api_key")
+        if not city:
+            return make_unavailable(self.name, "缺少城市参数", "bad_request")
+        center = (area or keyword or city).strip()
+        try:
+            geo = geocode(center, city=city)
+        except AmapError as exc:
+            return make_unavailable(self.name, "区域解析失败：%s" % exc, exc.code or "geo_error")
+
+        request = {
+            "city": city,
+            "area": center,
+            "location": geo.get("location"),
+            "radius": 8000,
+            "types": "100000|100100|100200",
+            "offset": 10,
+            "page": 1,
+        }
+        print("[amap-hotel] request=%s" % request, flush=True)
+        data = _get("/place/around", {
+            "location": request["location"], "radius": request["radius"],
+            "types": request["types"], "offset": request["offset"],
+            "page": request["page"], "extensions": "base", "output": "JSON",
+        }, timeout=self.timeout)
+
+        hotels = []
+        for row in data.get("pois") or []:
+            type_text = row.get("type") or ""
+            # 只认主类型为「住宿服务」；混合类型的酒家/餐厅会被排除
+            if (type_text.split(";")[0] or "").strip() != "住宿服务":
+                continue
+            name = (row.get("name") or "").strip()
+            if not name:
+                continue
+            district = (row.get("adname") or "").strip()
+            address = row.get("address")
+            if isinstance(address, list):
+                address = "".join(str(x) for x in address)
+            address = (address or "").strip()
+            extra = "，".join(x for x in (district, address) if x)
+            hotels.append("%s（%s）" % (name, extra) if extra else name)
+        hotels = list(dict.fromkeys(hotels))
+        print("[amap-hotel] names=%s" % hotels[:10], flush=True)
+        if not hotels:
+            return make_unavailable(self.name, "该区域暂时没有返回酒店：%s" % center,
+                                    "empty_response")
+        return make_ok(self.name, {
+            "城市": city,
+            "区域": center,
+            "酒店": hotels[:8],
+            "数据来源": "高德地图",
+        }, "获取成功（仅名称，无价格/房型）", ttl=self.ttl)
+
+
+class AmapFoodPOI(Provider):
+    """餐饮 POI 搜索：高德类型 050000（餐饮服务）。
+
+    只返回餐厅名称/区域/地址，不提供菜品、评分、人均价格。
+    菜品/小吃仍由 RAG 知识库补充。
+    """
+
+    name = "amap_poi_food_search"
+    ttl = 3600
+    timeout = 4.0
+
+    def fetch(self, city: str = None, area: str = None, keyword: str = None):
+        if not api_key():
+            return make_unavailable(self.name, "未配置 AMAP_API_KEY，餐饮接口暂不可用",
+                                    "no_api_key")
+        if not city:
+            return make_unavailable(self.name, "缺少城市参数", "bad_request")
+        center = (area or keyword or city).strip()
+        try:
+            geo = geocode(center, city=city)
+        except AmapError as exc:
+            return make_unavailable(self.name, "区域解析失败：%s" % exc,
+                                    exc.code or "geo_error")
+        request = {"city": city, "area": center, "location": geo.get("location"),
+                   "radius": 5000, "types": "050000", "offset": 10, "page": 1}
+        print("[amap-food] request=%s" % request, flush=True)
+        data = _get("/place/around", {
+            "location": geo["location"], "radius": request["radius"],
+            "types": request["types"], "offset": request["offset"],
+            "page": request["page"], "extensions": "base", "output": "JSON",
+        }, timeout=self.timeout)
+        foods = []
+        for row in data.get("pois") or []:
+            type_text = row.get("type") or ""
+            if (type_text.split(";")[0] or "").strip() != "餐饮服务":
+                continue
+            name = (row.get("name") or "").strip()
+            if not name:
+                continue
+            district = (row.get("adname") or "").strip()
+            address = row.get("address")
+            if isinstance(address, list):
+                address = "".join(str(x) for x in address)
+            address = (address or "").strip()
+            extra = "，".join(x for x in (district, address) if x)
+            foods.append("%s（%s）" % (name, extra) if extra else name)
+        foods = list(dict.fromkeys(foods))
+        print("[amap-food] names=%s" % foods[:10], flush=True)
+        if not foods:
+            return make_unavailable(self.name, "该区域暂时没有返回餐饮：%s" % center,
+                                    "empty_response")
+        return make_ok(self.name, {
+            "城市": city,
+            "区域": center,
+            "餐饮": foods[:8],
+            "数据来源": "高德地图",
+        }, "获取成功（仅餐厅名称/地址，无菜品与价格）", ttl=self.ttl)
+
+
 class AmapRoute(Provider):
     """两地之间的驾车/步行距离与预计耗时。"""
 
@@ -144,6 +274,87 @@ class AmapRoute(Provider):
             "出行方式": "驾车" if mode == "driving" else "步行",
             "距离(公里)": distance_km,
             "预计耗时(分钟)": minutes,
+            "数据来源": "高德地图",
+        }, "获取成功", ttl=self.ttl)
+
+
+class AmapTransit(Provider):
+    """公交/地铁路径规划（市内换乘；跨城会返回城际+地铁组合）。
+
+    注意：高德没有开放 12306 车次/余票接口；本工具不会编造高铁车次。
+    """
+
+    name = "amap_transit_route"
+    ttl = 600
+    timeout = 5.0
+
+    def fetch(self, origin: str = None, destination_place: str = None,
+              target_city: str = None):
+        if not api_key():
+            return make_unavailable(self.name, "未配置 AMAP_API_KEY，公交/地铁查询暂不可用",
+                                    "no_api_key")
+        if not (origin and destination_place):
+            return make_unavailable(self.name, "缺少起点或终点", "bad_request")
+        try:
+            geo_o = geocode(origin)
+            geo_d = geocode(destination_place, city=target_city)
+        except AmapError as exc:
+            return make_unavailable(self.name, "地点解析失败：%s" % exc,
+                                    exc.code or "geo_error")
+
+        city_start = geo_o.get("city") or ""
+        city_end = target_city or geo_d.get("city") or city_start
+        request = {
+            "origin": origin, "destination": destination_place,
+            "city": city_start, "cityd": city_end,
+            "origin_location": geo_o.get("location"),
+            "dest_location": geo_d.get("location"),
+        }
+        print("[amap-transit] request=%s" % request, flush=True)
+        data = _get("/direction/transit/integrated", {
+            "origin": geo_o["location"], "destination": geo_d["location"],
+            "city": city_start, "cityd": city_end, "strategy": 0,
+            "nightflag": 0, "extensions": "base", "output": "JSON",
+        }, timeout=self.timeout)
+
+        transits = ((data.get("route") or {}).get("transits") or [])
+        if not transits:
+            return make_unavailable(self.name, "没有找到公交/地铁方案：%s → %s"
+                                    % (origin, destination_place), "empty_response")
+
+        plans = []
+        for idx, item in enumerate(transits[:2], start=1):
+            parts = []
+            for seg in item.get("segments") or []:
+                walking = seg.get("walking") or {}
+                if walking.get("distance"):
+                    parts.append("步行%s米" % walking.get("distance"))
+                for line in ((seg.get("bus") or {}).get("buslines") or []):
+                    name = line.get("name") or ""
+                    dep = (line.get("departure_stop") or {}).get("name") or ""
+                    arr = (line.get("arrival_stop") or {}).get("name") or ""
+                    if name:
+                        parts.append("%s（%s→%s）" % (name, dep, arr))
+                railway = seg.get("railway") or {}
+                if railway.get("name") or railway.get("trip"):
+                    parts.append(("%s %s" % (railway.get("name") or "",
+                                             railway.get("trip") or "")).strip())
+            try:
+                km = round(float(item.get("distance") or 0) / 1000.0, 1)
+                minutes = round(float(item.get("duration") or 0) / 60.0)
+            except (TypeError, ValueError):
+                km, minutes = 0.0, 0
+            cost = item.get("cost")
+            plans.append("方案%d：约 %.1f 公里，约 %d 分钟，票价约 %s 元；%s"
+                         % (idx, km, minutes, cost if cost not in (None, "") else "未知",
+                            " → ".join(parts) if parts else "步行"))
+
+        print("[amap-transit] plans=%s" % plans, flush=True)
+        return make_ok(self.name, {
+            "起点": origin,
+            "终点": destination_place,
+            "方案": plans,
+            "说明": "公交/地铁方案来自高德；不含高铁车次与余票，跨城铁路请以 12306 为准",
             "数据来源": "高德地图",
         }, "获取成功", ttl=self.ttl)
 

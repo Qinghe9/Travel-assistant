@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import datetime as _dt
 
@@ -220,10 +221,18 @@ def classify_and_extract(state):
 
     jev_intent = jev.confident_intent(jev_result) if jev_result else None
     if jev_intent is not None:
-        result["intent"] = jev_intent
-        result["confidence"] = float(jev_result.get("confidence") or 0.0)
-        source = "jev"
-        note = (note + "；" if note else "") + "Jev 路由 %.2f" % result["confidence"]
+        trust = float(jev_result.get("confidence") or 0.0)
+        agree = result["intent"] is jev_intent
+        # 高置信度、或与主 LLM 一致、或主链路只是规则式时，采纳 Jev；
+        # 低置信度且与主 LLM 冲突时保留主 LLM，避免 0.55~0.75 的误路由。
+        if trust >= cfg.JEV_TRUST_CONFIDENCE or agree or source == "rule":
+            result["intent"] = jev_intent
+            result["confidence"] = trust
+            source = "jev"
+            note = (note + "；" if note else "") + "Jev 路由 %.2f" % trust
+        else:
+            note = (note + "；" if note else "") + (
+                "Jev %.2f 与主 LLM 不一致，保留主 LLM 路由" % trust)
 
     # 追问后的补充回答：沿用上一轮待补槽位的意图。
     # 只在“很短 + 明确像槽位”时生效，避免把随后的“你好”误当成答案。
@@ -275,7 +284,7 @@ def classify_and_extract(state):
     if updates:
         profile = save_profile(user_id, updates)
 
-    missing = missing_slots(intent, merged)
+    missing = missing_slots(intent, merged, text)
     pending_out = intent.value if missing else ""
     urgent = bool(jev_result.get("urgent")) if jev_result else False
     emotion = jev_result.get("emotion") if jev_result else None
@@ -372,13 +381,30 @@ def call_tools(state):
     results = registry.run_for_intent(intent, slots)
     tool_evidence = registry.to_evidence(results)
     notes = registry.unavailable_notes(results)
+    summaries = []
+    for item in results:
+        if item.status is ToolStatus.OK:
+            hotels = (item.data or {}).get("酒店")
+            plans = (item.data or {}).get("方案")
+            foods = (item.data or {}).get("餐饮")
+            if hotels:
+                summaries.append("%s（%d 家）" % (item.provider, len(hotels)))
+            elif plans:
+                summaries.append("%s（%d 个方案）" % (item.provider, len(plans)))
+            elif foods:
+                summaries.append("%s（%d 家）" % (item.provider, len(foods)))
+            else:
+                summaries.append(item.provider)
+        else:
+            summaries.append("%s（不可用）" % item.provider)
     return {
         "tool_results": [dump(item) for item in results],
         "evidence": list(state.get("evidence") or []) + tool_evidence,
         "citations": list(state.get("citations") or []) + registry.to_citations(tool_evidence),
         "trace": [trace_event("call_tools", _elapsed_ms(t0),
                               status="degraded" if notes else "ok",
-                              detail="｜".join(notes) if notes else "全部成功",
+                              detail="｜".join(notes) if notes
+                                     else ("、".join(summaries) + " — 全部成功"),
                               providers=[item.provider for item in results],
                               unavailable=notes)],
     }
@@ -419,6 +445,33 @@ def validate_plan(state):
                                                 issues=issues)]}
 
 
+def _evidence_for_prompt(state: dict, limit: int = 4) -> list:
+    """按意图决定证据优先级，避免工具证据被 RAG 挤掉。
+
+    - 天气/交通：实时数据，工具优先且只用工具；
+    - 住宿：高德酒店名称优先；工具为空才回退知识库；
+    - 美食：知识库为主；
+    - 目的地：知识库为主 + 1 条 POI；
+    - 行程：知识库 2 条 + 工具 2 条（天气/景点等）。
+    """
+    evidence = state.get("evidence") or []
+    intent = _as_intent(state.get("intent"))
+    tools = [item for item in evidence if item.get("kind") == "tool"]
+    knowledge = [item for item in evidence if item.get("kind") != "tool"]
+
+    if intent in (Intent.WEATHER, Intent.TRANSPORT):
+        picked = tools
+    elif intent is Intent.HOTEL:
+        picked = tools or knowledge
+    elif intent is Intent.FOOD:
+        picked = knowledge[:2] + tools[:2]
+    elif intent is Intent.DESTINATION:
+        picked = knowledge[:3] + tools[:1]
+    else:
+        picked = knowledge[:2] + tools[:2]
+    return (picked or evidence)[:limit]
+
+
 def _evidence_block(evidence: list, limit: int = 3, per_chars: int = 900) -> str:
     blocks = []
     for item in (evidence or [])[:limit]:
@@ -449,6 +502,38 @@ def _with_notes(answer: str, unavailable: list) -> str:
     return "\n".join(lines)
 
 
+_HEX_ID_RE = re.compile(r"[\[【]\s*([0-9a-fA-F]{8,16})\s*[\]】]")
+
+
+def _number_citations(text: str, citations: list) -> tuple:
+    """把 [hex source_id] 改成 [1][2]...，并返回按首次出现排序的引用。
+
+    编号只用于展示；证据校验仍用原始 source_id。
+    """
+    text = text or ""
+    referenced = []
+    for match in _HEX_ID_RE.finditer(text):
+        sid = match.group(1).lower()
+        if sid not in referenced:
+            referenced.append(sid)
+    by_id = {(c.get("source_id") or "").lower(): c for c in (citations or [])}
+    used, mapping = [], {}
+    for idx, sid in enumerate(referenced, start=1):
+        cite = by_id.get(sid)
+        if not cite:
+            continue
+        mapping[sid] = idx
+        item = dict(cite)
+        item["index"] = idx
+        used.append(item)
+
+    def repl(m):
+        sid = m.group(1).lower()
+        return "[%d]" % mapping[sid] if sid in mapping else m.group(0)
+
+    return _HEX_ID_RE.sub(repl, text), used
+
+
 def compose(state):
     """组织答案：逐句绑定 source_id；生成失败退化为抽取式，绝不编造。"""
     t0 = time.perf_counter()
@@ -466,6 +551,7 @@ def compose(state):
 
     text, note = "", ""
     kept, dropped, unbound = [], [], []
+    picked = _evidence_for_prompt(state)
     if llm.available():
         try:
             hint = profile_hint(state.get("profile") or {})
@@ -476,7 +562,17 @@ def compose(state):
             if state.get("urgent") or (state.get("emotion") or 0) >= 1.2:
                 hint = (hint + "\n" if hint else "") + (
                     "用户表达了紧迫或不满：先给结论，再给步骤，语气简洁克制。")
-            res = llm.chat_stream(prompts.compose_messages(_evidence_block(evidence), query, extra_rule=hint),
+            if _as_intent(state.get("intent")) is Intent.HOTEL:
+                hint = (hint + "\n" if hint else "") + (
+                    "住宿查询：只列酒店名称、区域和地址，不输出价格、房型、电话；"
+                    "以高德工具返回的酒店结果为准。")
+            if _as_intent(state.get("intent")) is Intent.FOOD:
+                hint = (hint + "\n" if hint else "") + (
+                    "美食查询：知识库用于菜品/小吃介绍，高德工具用于餐厅名称；"
+                    "分开列，不要编造菜品、价格或营业时间。")
+            res = llm.chat_stream(prompts.compose_messages(
+                                      _evidence_block(picked, limit=len(picked), per_chars=700),
+                                      query, extra_rule=hint),
                                   temperature=0.0, max_tokens=cfg.LLM_MAX_TOKENS,
                                   on_token=_emit_token)
             text = res.get("text") or ""
@@ -498,15 +594,17 @@ def compose(state):
         degraded = True
         try:
             from app.rag.generation.answer import extractive_answer
-            fallback = extractive_answer({"query": query, "chunks": evidence})
+            fallback = extractive_answer({"query": query, "chunks": picked})
         except Exception:
-            fallback = _simple_extractive(evidence)
+            fallback = _simple_extractive(picked)
         kept = [line for line in fallback.split("\n") if line.strip()]
 
     total = len(kept) + len(dropped) + len(unbound)
     rate = round(len(kept) / total, 4) if total else 0.0
+    numbered, used = _number_citations("\n".join(kept), citations)
     return {
-        "answer": _with_notes("\n".join(kept), unavailable),
+        "answer": _with_notes(numbered, unavailable),
+        "citations": used,
         "degraded": degraded or bool(dropped or unbound),
         "no_evidence": False,
         "evidence_binding_rate": rate,

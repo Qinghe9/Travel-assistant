@@ -21,6 +21,8 @@ app/agent/
 app/tools/
   base.py                 Provider 抽象：ToolResult + TTL 缓存 + 熔断 + 计时
   weather.py              Open-Meteo 天气（无需 Key，直接可用）
+  amap.py                 高德：景点/酒店/餐饮 POI、路线 / 天气
+  showapi.py              万维易源：节假日/调休、城市空气质量（免费接口）
   poi.py                  OpenTripMap 景点（需 Key）
   route.py                路线距离骨架（需 Key）
   transport.py            航班/铁路/酒店骨架（需 Travelport 凭据）
@@ -37,9 +39,11 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 |---|---|---|---|---|
 | INT-01 目的地信息查询 | 成都有什么好玩的 | destination | retrieve → tools | 知识库 + 景点 |
 | INT-02 行程规划 | 规划 3 天西安行程 | destination, days | retrieve → tools | 知识库 + 天气 + 景点 |
-| INT-03 交通查询 | 广州到长沙高铁有哪些 | start_city, target_city, date | tools | 路线距离（高德）+ 航班/铁路（需凭据） |
-| INT-04 住宿查询 | 西湖附近推荐酒店 | destination | retrieve → tools | 知识库 + 酒店（需凭据） |
-| INT-05 美食推荐 | 长沙有什么必吃 | destination | retrieve → tools | 知识库 |
+| INT-03 交通查询 | 广州到长沙高铁 / 天河区到广州塔怎么坐地铁 | origin, destination_place（高铁加 date） | tools | 高德驾车 + 公交/地铁换乘 + 铁路（需凭据） |
+
+> 高德没有 12306 车次/余票接口：公交/地铁可查线路与站点，高铁车次必须由正式铁路供应商提供，缺失时如实说明。
+| INT-04 住宿查询 | 广州天河区附近有什么酒店 | destination | retrieve → tools | 知识库 + 高德酒店 POI（仅名称/区域/地址） |
+| INT-05 美食推荐 | 杭州有什么好吃的 | destination | retrieve → tools | 知识库（菜品/小吃）+ 高德餐饮 POI（餐厅名称） |
 | INT-06 天气查询 | 明天长沙天气怎样 | destination, date | tools | Open-Meteo |
 | INT-07 闲聊与兜底 | 你好；谢谢 | 无 | chat | 大模型（无则固定话术） |
 
@@ -129,6 +133,8 @@ python scripts/smoke_agent_offline.py
 | `JEV_APP_KEY` | 空 | JevK5 决策路由（ShowAPI appKey） |
 | `JEV_MODE` | `gateway` | `gateway`（route.showapi.com）或 `native`（jev.showapi.com） |
 | `JEV_MIN_CONFIDENCE` | `0.55` | 低于该值不采纳 Jev 路由，回退主 LLM |
+| `JEV_TRUST_CONFIDENCE` | `0.75` | 与主 LLM 冲突时，达到该值才覆盖 |
+| `SHOWAPI_APP_KEY` | 空（回退 JEV_APP_KEY） | 万维易源节假日/空气质量接口 |
 
 ## 已知边界
 
