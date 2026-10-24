@@ -217,7 +217,8 @@ def _same_query(last_turn: dict, text: str) -> bool:
 
 def _build_tasks_from_specs(candidates: list, previous: dict, profile: dict) -> tuple:
     """把 (intent, query, slots) 规划项整理成可执行任务，并补齐共享槽位。"""
-    aggregate = dict(previous or {})
+    aggregate = {k: v for k, v in (previous or {}).items()
+                 if k not in slot_lib.TRANSIENT_SLOTS}
     for _intent, _part, slots in candidates:
         aggregate = slot_lib.merge_slots(aggregate, slots, new_city=slots.get("destination"))
     shared_city = (aggregate.get("target_city") or aggregate.get("destination")
@@ -370,6 +371,7 @@ def _memory_recall_answer(user_id: str, profile: dict, text: str) -> str:
         destinations.insert(0, destination)
     if not destinations and not history:
         return "目前还没有保存到可用的跨会话旅行记录。你可以直接告诉我想去的城市。"
+    destination_history = list((profile or {}).get("destination_history") or [])
     if not destinations:
         for row in reversed(history):
             city = ((row.get("slots") or {}).get("destination")
@@ -377,6 +379,15 @@ def _memory_recall_answer(user_id: str, profile: dict, text: str) -> str:
             if city and city not in destinations:
                 destinations.append(city)
     if destinations:
+        if destination_history:
+            latest = destination_history[0]
+            older = [x.get("city") for x in destination_history[1:]
+                     if x.get("city") and x.get("city") != latest.get("city")]
+            answer = ("最近一次关注/计划去的是%s（%s）" % (
+                latest.get("city"), latest.get("updated_at", "")[:19].replace("T", " ")))
+            if older:
+                answer += "；此前还关注过：%s" % "、".join(older[:5])
+            return answer + "。目前已保存 %d 轮对话。" % len(history)
         return (
             "根据跨会话保存的对话记录，你最近关注/计划去的是：%s。"
             "目前已保存 %d 轮对话，所以新会话也可以延续这些上下文。"
@@ -650,6 +661,10 @@ def classify_and_extract(state):
 
     intent = result["intent"]
     incoming = result["slots"] or {}
+    previous = slot_lib.scope_previous_slots(
+        previous, text, incoming, intent,
+        last_intent=str(last_turn.get("intent") or ""),
+    )
     merged = slot_lib.merge_slots(previous, incoming, new_city=incoming.get("destination"))
     # 规则式日期优先：用户说“明天/后天/10月20日”时，以本地解析结果覆盖模型输出
     date_range = slot_lib.parse_date_range(text)
@@ -680,7 +695,11 @@ def classify_and_extract(state):
     if not merged.get("preferences") and profile.get("preferences"):
         merged["preferences"] = list(profile["preferences"])
         note = (note + "；" if note else "") + "已套用长期偏好"
-    if not merged.get("destination") and profile.get("destination"):
+    province = slot_lib.detect_province(text)
+    if province:
+        merged["province"] = province
+
+    if not merged.get("destination") and profile.get("destination") and not province:
         merged["destination"] = profile["destination"]
         note = (note + "；" if note else "") + "沿用跨会话目的地"
     if not merged.get("start_city") and profile.get("start_city"):
@@ -692,6 +711,13 @@ def classify_and_extract(state):
     if updates:
         profile = save_profile(user_id, updates)
 
+    province_needs_city = bool(province and (
+        not merged.get("destination") or merged.get("destination") == province))
+    if province_needs_city:
+        merged.pop("destination", None)
+        note = (note + "；" if note else "") + (
+            "%s是省级行政区，请补充具体城市" % province)
+
     if multi_tasks:
         for task in multi_tasks:
             task_slots = slot_lib.merge_slots(merged, task.get("slots") or {})
@@ -702,6 +728,8 @@ def classify_and_extract(state):
         ))
     else:
         missing = missing_slots(intent, merged, text)
+    if province_needs_city:
+        missing = ["destination_city"]
     pending_out = intent.value if missing else ""
     urgent = bool(jev_result.get("urgent")) if jev_result else False
     emotion = jev_result.get("emotion") if jev_result else None
@@ -1259,6 +1287,98 @@ def _hotel_distance_appendix(state: dict, used_citations: list) -> str:
             + "\n".join("- " + row + mark for row in rows))
 
 
+def _profile_preference_notice(state: dict) -> str:
+    prefs = list((state.get("profile") or {}).get("preferences") or [])
+    if not prefs:
+        return ""
+    return "已结合你之前的长期偏好：%s。\n\n" % "、".join(prefs[:6])
+
+
+def _ensure_task_headings(text: str, state: dict) -> str:
+    """按任务自动插入稳定小标题，避免模型输出格式漂移。"""
+    tasks = state.get("tasks") or []
+    if len(tasks) <= 1:
+        return text
+    lines = text.splitlines()
+    specs = [
+        (Intent.DESTINATION, "景点推荐", ("景点",), r"景点|^\s*[-*].+"),
+        (Intent.TRANSPORT, "交通方案", ("交通",),
+         r"驾车|公交|地铁|高铁|航班|公里"),
+        (Intent.FOOD, "美食推荐", ("美食", "餐饮"),
+         r"餐厅|美食|小吃|烤鸭"),
+        (Intent.HOTEL, "住宿建议", ("住宿", "酒店"),
+         r"酒店|住宿|宾馆|公寓"),
+    ]
+    task_intents = {task.get("intent") for task in tasks}
+    for intent, title, header_words, marker in specs:
+        if intent.value not in task_intents:
+            continue
+        if any(any(word in line for word in header_words)
+               and (line.startswith("**") or line.startswith("#"))
+               for line in lines):
+            continue
+        pattern = re.compile(marker)
+        index = next((i for i, line in enumerate(lines)
+                      if pattern.search(line) and not line.startswith("已结合")), None)
+        if index is not None:
+            lines.insert(index, "**%s**" % title)
+    return "\n".join(lines)
+
+
+def _binding_below_gate(rate: float) -> bool:
+    return float(rate or 0.0) < 0.7
+
+
+def _answer_token_budget(state: dict) -> int:
+    """按任务复杂度计算输出预算，避免三天行程或四任务回答被截断。"""
+    tasks = state.get("tasks") or []
+    intents = _intents_of(state)
+    if len(tasks) > 1:
+        return max(cfg.LLM_MAX_TOKENS, 2200)
+    if Intent.ITINERARY in intents:
+        return max(cfg.LLM_MAX_TOKENS, 1400)
+    if any(item in intents for item in (Intent.HOTEL, Intent.FOOD)):
+        return max(cfg.LLM_MAX_TOKENS, 1200)
+    return max(cfg.LLM_MAX_TOKENS, 512)
+
+
+_TASK_TERMS = {
+    Intent.DESTINATION: ("景点", "好玩", "游玩", "公园", "博物馆", "长城"),
+    Intent.ITINERARY: ("第一天", "第二天", "行程", "逐日"),
+    Intent.TRANSPORT: ("交通", "路线", "驾车", "公交", "地铁", "航班", "高铁", "公里"),
+    Intent.HOTEL: ("酒店", "住宿", "宾馆", "公寓"),
+    Intent.FOOD: ("美食", "餐厅", "小吃", "烤鸭", "菜"),
+    Intent.WEATHER: ("天气", "气温", "降水", "℃"),
+}
+def _answer_completion_issues(state: dict, text: str) -> list:
+    """检查句子截断、逐日结构和复合任务覆盖。"""
+    issues = []
+    content = (text or "").strip()
+    if not content:
+        return ["回答为空"]
+    core = re.sub(r"(?:\s*\[\d+\])+\s*$", "", content).rstrip()
+    if not re.search(r"[。！？.!?）)\]】]$", core):
+        issues.append("回答结尾不完整")
+    intents = _intents_of(state)
+    if Intent.ITINERARY in intents:
+        days = int((state.get("slots") or {}).get("days") or 0)
+        labels = ["第一天", "第二天", "第三天", "第四天", "第五天"]
+        need = labels[:min(max(days, 1), len(labels))]
+        if days and not all(label in content for label in need):
+            issues.append("缺少完整逐日结构")
+    tasks = state.get("tasks") or []
+    if len(tasks) > 1:
+        for task in tasks:
+            try:
+                task_intent = Intent(task.get("intent"))
+            except Exception:
+                continue
+            terms = _TASK_TERMS.get(task_intent, ())
+            if terms and not any(term in content for term in terms):
+                issues.append("遗漏任务 %s" % task_intent.value)
+    return list(dict.fromkeys(issues))
+
+
 def compose(state):
     """组织答案：逐句绑定 source_id；生成失败退化为抽取式，绝不编造。"""
     t0 = time.perf_counter()
@@ -1291,7 +1411,7 @@ def compose(state):
                 "trace": [trace_event("compose", _elapsed_ms(t0), status="degraded",
                                       detail="无证据，拒答")]}
 
-    text, note = "", ""
+    text, note, hint = "", "", ""
     kept, dropped, unbound = [], [], []
     tasks = state.get("tasks") or []
     picked = _evidence_for_prompt(state, limit=8 if len(tasks) > 1 else 4)
@@ -1345,6 +1465,7 @@ def compose(state):
                 )
                 hint = (hint + "\n" if hint else "") + (
                     "这是复合请求，必须逐项回答，不能只回答第一个问题。任务顺序：%s。"
+                    "每个任务使用清晰小标题（如景点、交通、美食、住宿）；"
                     "不同任务的事实分别绑定各自证据，并在最后给出简短的“限制与待确认”。" % sections
                 )
             if any(task.get("intent") == Intent.HOTEL.value for task in tasks):
@@ -1377,8 +1498,7 @@ def compose(state):
                                       _evidence_block(picked, limit=len(picked), per_chars=700),
                                       query, extra_rule=hint),
                                   temperature=0.0,
-                                  max_tokens=max(cfg.LLM_MAX_TOKENS, 768) if len(tasks) > 1
-                                  else cfg.LLM_MAX_TOKENS,
+                                  max_tokens=_answer_token_budget(state),
                                   on_token=_emit_token)
             text = res.get("text") or ""
         except Exception as exc:
@@ -1404,15 +1524,57 @@ def compose(state):
             fallback = _simple_extractive(picked)
         kept = [line for line in fallback.split("\n") if line.strip()]
 
+    completion_issues = _answer_completion_issues(state, "\n".join(kept))
+    if completion_issues and llm.available():
+        try:
+            retry_rule = (hint + "\n" if hint else "") + (
+                "上一稿存在以下完整性问题：%s。请从头重新完整作答，保留引用编号；"
+                "行程必须明确写第一天、第二天、第三天；复合问题每个任务都要有标题和结果；"
+                "不要重复上一稿的开头，不要在中途结束。"
+                % "；".join(completion_issues))
+            retry = llm.chat_stream(prompts.compose_messages(
+                                        _evidence_block(picked, limit=len(picked), per_chars=700),
+                                        query, extra_rule=retry_rule),
+                                    temperature=0.0,
+                                    max_tokens=_answer_token_budget(state) + 600,
+                                    on_token=_emit_token)
+            retry_text = retry.get("text") or ""
+            if retry_text:
+                from app.rag.generation.answer import post_validate
+                retry_kept_text, retry_dropped, retry_unbound = post_validate(
+                    retry_text, citations)
+                retry_kept = [line for line in retry_kept_text.split("\n") if line.strip()]
+                retry_issues = _answer_completion_issues(state, "\n".join(retry_kept))
+                if retry_kept and len(retry_issues) < len(completion_issues):
+                    kept = retry_kept
+                    dropped, unbound = retry_dropped, retry_unbound
+                    completion_issues = retry_issues
+                    note = (note + "；" if note else "") + "完整性问题已触发一次重写"
+        except Exception as exc:
+            note = (note + "；" if note else "") + (
+                "完整性重写失败：%s" % llm.error_of(exc))
+    if completion_issues:
+        degraded = True
+
     total = len(kept) + len(dropped) + len(unbound)
     rate = round(len(kept) / total, 4) if total else 0.0
+    binding_issue = _binding_below_gate(rate)
+    if binding_issue:
+        degraded = True
     numbered, used = _number_citations("\n".join(kept), citations)
+    numbered = _ensure_task_headings(numbered, state)
     hotel_distance_text = _hotel_distance_appendix(state, used)
     if hotel_distance_text and "酒店到行程景点距离" not in numbered:
         numbered += hotel_distance_text
     limitations = _quality_limitations(state, used)
+    if binding_issue:
+        limitations.append("证据绑定率为 %.0f%%，低于 70%% 的规划质量门槛。" % (rate * 100))
     if limitations and "限制与待确认" not in numbered:
         numbered += "\n\n限制与待确认：\n" + "\n".join("- " + line for line in limitations)
+    if completion_issues:
+        numbered += ("\n\n完整性提示：本稿仍存在 %s，建议缩短问题范围或补充条件后重试。"
+                     % "、".join(completion_issues))
+    numbered = _profile_preference_notice(state) + numbered
     return {
         "answer": _with_notes(numbered, unavailable),
         "citations": used,

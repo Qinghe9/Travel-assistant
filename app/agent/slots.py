@@ -25,6 +25,17 @@ BASE_CITIES = [
     "满洲里", "景德镇", "婺源", "凤凰", "九寨沟", "峨眉山", "曲阜",
 ]
 
+PROVINCES = {
+    "河北": "石家庄", "山西": "太原", "辽宁": "沈阳", "吉林": "长春",
+    "黑龙江": "哈尔滨", "江苏": "南京", "浙江": "杭州", "安徽": "合肥",
+    "福建": "福州", "江西": "南昌", "山东": "济南", "河南": "郑州",
+    "湖北": "武汉", "湖南": "长沙", "广东": "广州", "海南": "海口",
+    "四川": "成都", "贵州": "贵阳", "云南": "昆明", "陕西": "西安",
+    "甘肃": "兰州", "青海": "西宁", "台湾": "台北",
+    "内蒙古": "呼和浩特", "广西": "南宁", "西藏": "拉萨",
+    "宁夏": "银川", "新疆": "乌鲁木齐",
+}
+
 _CITY_CACHE = None
 
 
@@ -59,6 +70,14 @@ def detect_city(text: str):
         if pos >= 0 and (best is None or pos < best[0] or (pos == best[0] and len(name) > len(best[1]))):
             best = (pos, name)
     return best[1] if best else None
+
+
+def detect_province(text: str):
+    """识别省级行政区；用于避免把“贵州”等省名直接当城市查实时数据。"""
+    q = text or ""
+    matches = [(q.find(name), name) for name in PROVINCES if name in q]
+    matches = [item for item in matches if item[0] >= 0]
+    return min(matches)[1] if matches else None
 
 
 _CN_DIGIT = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
@@ -323,7 +342,7 @@ def rule_intent(text: str) -> Intent:
     return Intent.CHITCHAT
 
 
-SLOT_FIELDS = ("destination", "start_city", "target_city", "origin", "destination_place",
+SLOT_FIELDS = ("destination", "province", "start_city", "target_city", "origin", "destination_place",
                "date", "start_date", "end_date", "days", "people", "budget",
                "category", "entity", "area", "preferences")
 
@@ -416,6 +435,28 @@ def merge_slots(previous: dict, incoming: dict, new_city: str = None) -> dict:
         else:
             slots[key] = value
     return slots
+
+
+TRANSIENT_SLOTS = ("category", "entity", "area")
+_REFERENCE_WORDS = (
+    "它", "这个", "该", "那里", "那边", "上面", "刚才", "前面",
+    "门票", "开放时间", "营业时间", "距离", "多远", "怎么去", "附近",
+    "还有", "另外", "再", "呢", "换成", "改成",
+)
+
+
+def scope_previous_slots(previous: dict, text: str, incoming: dict, intent: Intent,
+                         last_intent: str = "") -> dict:
+    """隔离单轮实体，避免上一轮“酒店”污染本轮景点或 RAG 搜索。"""
+    out = dict(previous or {})
+    same_follow_up = (last_intent == intent.value
+                      and any(word in (text or "") for word in _REFERENCE_WORDS))
+    if same_follow_up:
+        return out
+    for key in TRANSIENT_SLOTS:
+        if (incoming or {}).get(key) in (None, "", [], {}):
+            out.pop(key, None)
+    return out
 
 
 def normalize_text(text: str) -> str:

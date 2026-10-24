@@ -44,6 +44,7 @@ for _p in (Path(os.environ["AGENT_TRACE_LOG"]), Path(os.environ["AGENT_PROFILE_D
 from app.agent import nodes, retrieval  # noqa: E402
 from app.agent.graph import build_graph  # noqa: E402
 from app.agent import slots as slot_lib  # noqa: E402
+from app.models.schemas import Intent as _Intent  # noqa: E402
 from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 
 FAIL = []
@@ -141,6 +142,67 @@ check("省略终点时抽取出发地",
 check("去某地玩识别为目的地",
       slot_lib.rule_intent("我想去北京玩").value == "INT-01",
       slot_lib.rule_intent("我想去北京玩").value)
+check("省份识别",
+      slot_lib.detect_province("贵州天气怎么样") == "贵州",
+      str(slot_lib.detect_province("贵州天气怎么样")))
+_stale_previous = {"destination": "杭州", "days": 3, "category": "hotel",
+                   "entity": "有什么酒店", "preferences": ["亲子"]}
+_scoped = slot_lib.scope_previous_slots(
+    _stale_previous, "帮我规划三天杭州行程",
+    slot_lib.rule_extract("帮我规划三天杭州行程"), _Intent.ITINERARY,
+    last_intent="INT-04")
+check("新任务不继承旧酒店实体",
+      "entity" not in _scoped and "category" not in _scoped
+      and _scoped.get("destination") == "杭州" and _scoped.get("days") == 3,
+      str(_scoped))
+_scoped_follow = slot_lib.scope_previous_slots(
+    {"destination": "杭州", "entity": "西湖", "category": "attraction"},
+    "门票多少钱", {}, _Intent.DESTINATION, last_intent="INT-01")
+check("同意图追问保留景点实体",
+      _scoped_follow.get("entity") == "西湖", str(_scoped_follow))
+_s_province = run("明天贵州天气怎么样")
+check("省份天气先追问具体城市",
+      "ask_clarify" in nodes_of(_s_province)
+      and "destination_city" in (_s_province.get("missing") or [])
+      and (_s_province.get("slots") or {}).get("province") == "贵州",
+      "%s / %s" % (_s_province.get("missing"), _s_province.get("slots")))
+_plan_state = {"intent": "INT-02", "intents": ["INT-02"],
+               "slots": {"days": 3}, "tasks": []}
+check("行程获得更高 token 预算",
+      nodes._answer_token_budget(_plan_state) >= 1400,
+      str(nodes._answer_token_budget(_plan_state)))
+_completion = nodes._answer_completion_issues(
+    _plan_state, "第一天北京天气不错，随后准备去慕田峪长城（怀柔区")
+check("行程截断与缺少逐日结构可检出",
+      "回答结尾不完整" in _completion and "缺少完整逐日结构" in _completion,
+      str(_completion))
+_multi_state = {"intent": "INT-01",
+                "intents": ["INT-01", "INT-03", "INT-05", "INT-04"],
+                "slots": {},
+                "tasks": [{"intent": "INT-01"}, {"intent": "INT-03"},
+                          {"intent": "INT-05"}, {"intent": "INT-04"}]}
+_coverage = nodes._answer_completion_issues(
+    _multi_state, "北京有长城。驾车约1000公里。")
+check("复合任务覆盖缺失可检出", "遗漏任务 INT-05" in _coverage, str(_coverage))
+check("复合任务获得更高 token 预算",
+      nodes._answer_token_budget(_multi_state) >= 2200,
+      str(nodes._answer_token_budget(_multi_state)))
+_heading_text = nodes._ensure_task_headings(
+    "- 天安门位于北京。\n- 驾车约1000公里。\n以下餐厅名单：\n- 烤鸭店。\n"
+    "以下酒店名单：\n- 测试酒店。\n",
+    _multi_state)
+check("复合任务自动插入稳定标题",
+      all(title in _heading_text for title in
+          ("**景点推荐**", "**交通方案**", "**美食推荐**", "**住宿建议**")),
+      _heading_text)
+check("长期偏好会显式提示",
+      "亲子" in nodes._profile_preference_notice(
+          {"profile": {"preferences": ["亲子", "老人友好"]}}),
+      nodes._profile_preference_notice(
+          {"profile": {"preferences": ["亲子", "老人友好"]}}))
+check("低证据绑定率触发质量门禁",
+      nodes._binding_below_gate(0.57) and not nodes._binding_below_gate(0.8),
+      "")
 
 # 0b) 日期过期策略
 import datetime as _dt  # noqa: E402
@@ -513,7 +575,9 @@ _food_ids = [e["source_id"] for e in _food_pick]
 check("美食工具在前 RAG 在后", _food_ids == ["t1", "k0", "k1", "k2"], str(_food_ids))
 
 # 0l) 跨会话完整记忆：新 thread 仍可按同一个 user_id 延续目的地与历史
-from app.agent.store import clear_profile, load_history, load_profile  # noqa: E402
+from app.agent.store import (  # noqa: E402
+    clear_profile, load_history, load_profile, save_profile,
+)
 _memory_user = "u-memory-" + uuid.uuid4().hex[:8]
 _s_seed = run("广州有哪些必去的景点", "memory-seed", _memory_user)
 _profile_after = load_profile(_memory_user)
@@ -538,6 +602,13 @@ check("新会话自动沿用目的地",
       str(_s_follow_city.get("slots")))
 check("第二轮也写入长期历史", len(load_history(_memory_user)) >= 3,
       str(len(load_history(_memory_user))))
+_profile_recency = save_profile(_memory_user, {"destination": "北京"})
+_recall_text = nodes._memory_recall_answer(
+    _memory_user, _profile_recency, "从之前的记录，知道我想去哪里吗")
+check("记忆区分最新与历史目的地",
+      "最近一次" in _recall_text and "北京" in _recall_text
+      and "此前" in _recall_text and "广州" in _recall_text,
+      _recall_text)
 clear_profile(_memory_user)
 check("清除长期记忆同时清空历史",
       load_profile(_memory_user) == {} and load_history(_memory_user) == [],
@@ -573,7 +644,8 @@ check("正文不再出现 hex 编号", re.search(r"\[[0-9a-fA-F]{8,16}\]", answe
 
 fact_lines = [line for line in answer.split("\n")
               if line.strip() and not line.startswith("说明") and not line.startswith("- ")
-              and not line.startswith("知识库中")]
+              and not line.startswith("知识库中") and not line.startswith("已结合")
+              and not line.startswith("完整性提示")]
 bound = [line for line in fact_lines if re.search(r"\[\d+\]", line)]
 check("每个事实句都绑定引用", fact_lines and len(bound) == len(fact_lines),
       "%d/%d" % (len(bound), len(fact_lines)))
@@ -693,6 +765,14 @@ check("工具并行执行", len(_parallel_results) == 3 and _parallel_elapsed < 
 
 # 高德同一地点的并发地理编码只应发出一次请求
 from app.tools import amap as amap_mod  # noqa: E402
+check("酒店泛化关键词回退城市中心",
+      amap_mod.usable_center("有什么酒店", "杭州") == "杭州"
+      and amap_mod.usable_center("西湖区", "杭州") == "西湖区",
+      amap_mod.usable_center("有什么酒店", "杭州"))
+check("住宿结果过滤洗头按摩类误标",
+      not amap_mod.is_lodging_name("宫廷假日越南帝王天后洗头")
+      and amap_mod.is_lodging_name("杭州康莱德酒店SPA"),
+      "")
 _real_amap_get, _real_amap_key = amap_mod._get, amap_mod.api_key
 _geo_calls = [0]
 _geo_count_lock = threading.Lock()

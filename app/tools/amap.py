@@ -26,6 +26,29 @@ _GEO_TTL_SECONDS = 86400
 _AMAP_RATE_LOCK = threading.Lock()
 _AMAP_LAST_CALL = [0.0]
 _AMAP_MIN_INTERVAL = float(os.environ.get("AMAP_MIN_INTERVAL", "0.36"))
+_GENERIC_CENTERS = {
+    "酒店", "住宿", "民宿", "宾馆", "旅馆", "住哪里", "住哪", "在哪住",
+    "有什么酒店", "有什么住宿", "推荐酒店", "附近酒店", "附近的酒店",
+    "餐厅", "美食", "吃什么", "有什么美食", "附近餐厅", "附近的餐厅",
+}
+_LODGING_WORDS = ("酒店", "宾馆", "公寓", "民宿", "旅馆", "招待所", "饭店")
+_NON_LODGING_WORDS = ("洗头", "美发", "足浴", "按摩", "SPA", "养生", "会所", "KTV")
+
+
+def usable_center(value: str, city: str) -> str:
+    """过滤“有什么酒店/住哪里”等意图词，非法搜索中心退回城市中心。"""
+    center = (value or "").strip()
+    if not center or center in _GENERIC_CENTERS:
+        return (city or "").strip()
+    if any(word in center for word in ("有什么", "在哪里", "去哪", "推荐")):
+        return (city or "").strip()
+    return center
+
+
+def is_lodging_name(name: str) -> bool:
+    text = str(name or "")
+    return not (any(word in text for word in _NON_LODGING_WORDS)
+                and not any(word in text for word in _LODGING_WORDS))
 
 
 class AmapError(RuntimeError):
@@ -187,11 +210,31 @@ class AmapHotelPOI(Provider):
                                     "no_api_key")
         if not city:
             return make_unavailable(self.name, "缺少城市参数", "bad_request")
-        center = (area or keyword or city).strip()
+        center = usable_center(area or keyword or city, city)
+        retried = False
         try:
             geo = geocode(center, city=city)
+            data = _get("/place/around", {
+                "location": geo.get("location"), "radius": 8000,
+                "types": "100000|100100|100200", "offset": 25,
+                "page": 1, "extensions": "base", "output": "JSON",
+            }, timeout=self.timeout)
         except AmapError as exc:
-            return make_unavailable(self.name, "区域解析失败：%s" % exc, exc.code or "geo_error")
+            if center == city:
+                return make_unavailable(self.name, "区域解析/酒店搜索失败：%s" % exc,
+                                        exc.code or "geo_error")
+            center = city
+            retried = True
+            try:
+                geo = geocode(center, city=city)
+                data = _get("/place/around", {
+                    "location": geo.get("location"), "radius": 8000,
+                    "types": "100000|100100|100200", "offset": 25,
+                    "page": 1, "extensions": "base", "output": "JSON",
+                }, timeout=self.timeout)
+            except AmapError as retry_exc:
+                return make_unavailable(self.name, "城市中心重试仍失败：%s" % retry_exc,
+                                        retry_exc.code or "retry_failed")
 
         request = {
             "city": city,
@@ -203,11 +246,6 @@ class AmapHotelPOI(Provider):
             "page": 1,
         }
         print("[amap-hotel] request=%s" % request, flush=True)
-        data = _get("/place/around", {
-            "location": request["location"], "radius": request["radius"],
-            "types": request["types"], "offset": request["offset"],
-            "page": request["page"], "extensions": "base", "output": "JSON",
-        }, timeout=self.timeout)
 
         hotels = []
         hotel_points = []
@@ -218,6 +256,8 @@ class AmapHotelPOI(Provider):
                 continue
             name = (row.get("name") or "").strip()
             if not name:
+                continue
+            if not is_lodging_name(name):
                 continue
             district = (row.get("adname") or "").strip()
             address = row.get("address")
@@ -239,6 +279,7 @@ class AmapHotelPOI(Provider):
             "区域": center,
             "检索中心": center,
             "检索半径": "8公里",
+            "城市中心重试": retried,
             "酒店": hotels[:15],
             "_points": hotel_points[:15],
             "数据来源": "高德地图",
@@ -262,7 +303,7 @@ class AmapFoodPOI(Provider):
                                     "no_api_key")
         if not city:
             return make_unavailable(self.name, "缺少城市参数", "bad_request")
-        center = (area or keyword or city).strip()
+        center = usable_center(area or keyword or city, city)
         try:
             geo = geocode(center, city=city)
         except AmapError as exc:

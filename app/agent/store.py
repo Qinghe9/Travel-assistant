@@ -22,7 +22,7 @@ NAMESPACE = ("user",)
 HISTORY_NAMESPACE = ("user_history",)
 PROFILE_FIELDS = (
     "preferences", "budget", "people",
-    "destination", "start_city", "recent_destinations",
+    "destination", "start_city", "recent_destinations", "destination_history",
 )
 
 _LOCK = threading.RLock()
@@ -78,6 +78,11 @@ def _merge(current: dict, updates: dict) -> dict:
     if destination:
         recent = [str(destination)] + [x for x in recent if x != str(destination)]
         out["recent_destinations"] = recent[:5]
+        history = [dict(x) for x in (current.get("destination_history") or [])
+                   if isinstance(x, dict) and x.get("city")]
+        history = [x for x in history if x.get("city") != str(destination)]
+        history.insert(0, {"city": str(destination), "updated_at": now_iso()})
+        out["destination_history"] = history[:20]
     return out
 
 
@@ -145,6 +150,10 @@ def profile_hint(profile: dict) -> str:
         parts.append("上次出发城市：%s" % profile["start_city"])
     if profile.get("recent_destinations"):
         parts.append("最近关注城市：" + "、".join(profile["recent_destinations"][:5]))
+    if profile.get("destination_history"):
+        latest = profile["destination_history"][0]
+        parts.append("最近一次目的地：%s（%s）" % (
+            latest.get("city", ""), latest.get("updated_at", "")))
     if not parts:
         return ""
     return ("用户长期偏好（仅用于排序与措辞，**不得作为事实依据**，也不要为它标注来源）："

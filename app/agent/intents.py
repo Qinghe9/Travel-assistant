@@ -23,6 +23,8 @@ REQUIRED_SLOTS: dict[Intent, tuple[str, ...]] = {
 # 槽位的中文名，用于追问文案
 SLOT_LABEL = {
     "destination": "目的地",
+    "destination_city": "具体城市（例如贵阳）",
+    "province": "省份",
     "start_city": "出发城市",
     "target_city": "到达城市",
     "origin": "出发地",
