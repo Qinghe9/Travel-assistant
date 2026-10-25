@@ -28,11 +28,11 @@
 | 编号 | 要求 | 状态 | 说明 |
 |---|---|---|---|
 | FR-01 | 意图 + 结构化槽位；解析失败修复一次 | 🟡 | JevK5 + LLM 槽位 + Pydantic + 规则降级；已实现解析/校验失败后自动修复一次；仍缺 intent/slot 正式评测集 |
-| FR-02 | 目的地检索，展示名称/简介/位置/来源/时间 | 🟡 | 高德 POI 名称/区域/地址 + 来源；简介来自 RAG；**没有开放状态校验** |
+| FR-02 | 目的地检索，展示名称/简介/位置/来源/时间 | 🟡 | 高德 POI 名称/区域/地址 + 来源；简介来自 RAG；已支持地级市/县级检索中心透传；**没有开放状态校验** |
 | FR-03 | 逐日行程、时段、时长、交通、天气适配、预算小计、冲突检查 | ❌ | 目前只输出文字建议；`validate_plan` 只检查天数/预算粗略冲突 |
 | FR-04 | 航班/铁路/酒店正式 API | 🟡 | **酒店名称已接入高德 POI**（place/around，types=100000/100100/100200）；航班/铁路仍无凭据；价格/库存未接入 |
 | FR-05 | 天气 API，失败重试 2 次指数退避 | 🟡 | 天气可用；缓存 30 分钟；**工具层没有重试/退避** |
-| FR-06 | 向量 + BM25 + RRF，逐句引用，Top3≥95% | 🟡 | RAG 模块达标（基线 Recall@3 0.9845 / MRR 0.9601）；Agent 端有引用后置校验；**未做 Agent 级 RAG 评测**；绑定率常在 0.38~0.83（未绑定句子被剔除） |
+| FR-06 | 向量 + BM25 + RRF，逐句引用，Top3≥95% | 🟡 | RAG 模块达标（基线 Recall@3 0.9845 / MRR 0.9601）；全国城市坐标采用 scope→高德 geocode→GeoNames 三级解析；Agent 端有引用后置校验；**未做 Agent 级 RAG 评测**；绑定率仍需继续提升 |
 | FR-07 | thread_id 记忆、10 轮、重启恢复 | 🟡 | SQLite 短期记忆、跨进程恢复已验证；同步/异步连接与长期 Store 已启用 WAL/busy_timeout；仍缺 10 轮回归、工具摘要入提示和 summary/trimming |
 | FR-08 | Chainlit 展示步骤与耗时 | 🟡 | 自研 `/demo` 已展示步骤/耗时/引用；**不是 Chainlit** |
 | FR-09 | 点赞/点踩、SQLite、CSV 导出 | 🟡 | `/api/v1/feedback` 已 JSONL+SQLite 双写，支持日期过滤 CSV 导出；仍缺 UI 按钮 |
@@ -73,7 +73,7 @@
 | AI 辅助开发档案 | 🟡 | `docs/ai-dev-log` 与 `docs/meetings` 已加入 gitignore 白名单并建立模板 |
 | 系统设计/测试/部署文档、PPT | ❌ | 尚未产出 |
 | 私有/公开来源指标 | ❌ | 现有 17553 chunk 全部 `source_type=public` |
-| 数据文件完整性 | 🟡 | `data/scope_cities.json`、`data/china_scope_titles.json` 缺失（Agent 有内置城市表兜底） |
+| 数据文件完整性 | 🟡 | 代码支持 `scope_cities.json`、`scope_counties.json`、`geo_index.json`；数据文件按本机快照生成，不入库 |
 | 代码提交 | ❌ | Agent/API 代码仍全部未提交（`feature/agent` 工作区） |
 
 ## 五、最关键的 5 个风险
