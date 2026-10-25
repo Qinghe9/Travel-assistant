@@ -26,9 +26,44 @@ PROFILE_FIELDS = (
     "destination", "start_city", "recent_destinations", "destination_history",
 )
 
+# 长期记忆里已有历史脏数据，读取时也要归一化，不能只修新写入。
+PREFERENCE_ALIASES = {
+    "靠近景点": "离景点近",
+    "近景点": "离景点近",
+    "景点附近": "离景点近",
+    "离景区近": "离景点近",
+    "带娃": "亲子",
+    "带孩子": "亲子",
+    "有孩子": "亲子",
+    "亲子游": "亲子",
+    "适合老人": "老人友好",
+    "老人出行": "老人友好",
+    "历史人文": "历史文化",
+    "人文历史": "历史文化",
+    "自然景观": "自然风光",
+    "购物方便": "购物",
+}
+
 _LOCK = threading.RLock()
 _STORE = None
 _CONN = None
+
+
+def normalize_preferences(values) -> list:
+    """标准化并去重长期偏好，兼容已经落库的同义脏数据。"""
+    if values in (None, "", []):
+        return []
+    if isinstance(values, str):
+        values = [values]
+    out = []
+    for raw in values:
+        item = str(raw or "").strip()
+        if not item:
+            continue
+        item = PREFERENCE_ALIASES.get(item, item)
+        if item not in out:
+            out.append(item)
+    return out
 
 
 def get_profile_store():
@@ -65,10 +100,9 @@ def _merge(current: dict, updates: dict) -> dict:
     """偏好和目的地取并集；标量字段以最新一次明确表达为准。"""
     out = {k: current.get(k) for k in PROFILE_FIELDS
            if current.get(k) not in (None, "", [], {})}
-    prefs = list(out.get("preferences") or [])
-    for item in (updates or {}).get("preferences") or []:
-        if item and item not in prefs:
-            prefs.append(item)
+    prefs = normalize_preferences(
+        list(out.get("preferences") or [])
+        + list((updates or {}).get("preferences") or []))
     if prefs:
         out["preferences"] = prefs
     for key in ("budget", "people", "destination", "start_city"):
@@ -95,7 +129,10 @@ def load_profile(user_id: str) -> dict:
     try:
         with _LOCK:
             item = get_profile_store().get(NAMESPACE, user_id)
-        return dict(item.value or {}) if item else {}
+        profile = dict(item.value or {}) if item else {}
+        if profile.get("preferences"):
+            profile["preferences"] = normalize_preferences(profile["preferences"])
+        return profile
     except Exception as exc:
         print("  [memory] 读取长期偏好失败：%s" % exc)
         return {}
@@ -140,8 +177,9 @@ def profile_hint(profile: dict) -> str:
     if not profile:
         return ""
     parts = []
-    if profile.get("preferences"):
-        parts.append("偏好：" + "、".join(profile["preferences"][:6]))
+    preferences = normalize_preferences(profile.get("preferences"))
+    if preferences:
+        parts.append("偏好：" + "、".join(preferences[:6]))
     if profile.get("budget"):
         parts.append("习惯预算：%s 元" % profile["budget"])
     if profile.get("people"):

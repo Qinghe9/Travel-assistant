@@ -33,6 +33,9 @@ _GENERIC_CENTERS = {
 }
 _LODGING_WORDS = ("酒店", "宾馆", "公寓", "民宿", "旅馆", "招待所", "饭店")
 _NON_LODGING_WORDS = ("洗头", "美发", "足浴", "按摩", "SPA", "养生", "会所", "KTV")
+_NON_FOOD_WORDS = ("美甲", "美睫", "美容", "美发", "理发", "宾馆", "酒店",
+                   "物业", "诊所", "医院", "快递", "网吧", "足浴", "按摩",
+                   "洗浴", "养生", "会所", "KTV")
 
 
 def usable_center(value: str, city: str) -> str:
@@ -49,6 +52,71 @@ def is_lodging_name(name: str) -> bool:
     text = str(name or "")
     return not (any(word in text for word in _NON_LODGING_WORDS)
                 and not any(word in text for word in _LODGING_WORDS))
+
+
+def is_food_name(name: str) -> bool:
+    text = str(name or "")
+    return bool(text.strip()) and not any(word in text for word in _NON_FOOD_WORDS)
+
+
+def _location_xy(value):
+    try:
+        lon, lat = (float(part) for part in str(value or "").split(",", 1))
+        return lon, lat
+    except (TypeError, ValueError):
+        return None
+
+
+def _distance_m(first, second) -> float:
+    """两个高德 location 的近似球面距离（米）。"""
+    import math
+
+    a, b = _location_xy(first), _location_xy(second)
+    if not a or not b:
+        return float("inf")
+    lon1, lat1 = map(math.radians, a)
+    lon2, lat2 = map(math.radians, b)
+    dlon, dlat = lon2 - lon1, lat2 - lat1
+    h = (math.sin(dlat / 2) ** 2
+         + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2)
+    return 6371000 * 2 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _poi_name_related(first: str, second: str) -> bool:
+    left = "".join(str(first or "").split())
+    right = "".join(str(second or "").split())
+    if min(len(left), len(right)) < 4:
+        return False
+    return left.startswith(right) or right.startswith(left)
+
+
+def _merge_near_duplicate_pois(rows: list, max_distance_m: float = 500.0) -> list:
+    """合并同名前缀或 500 米内的 POI，保留信息更完整的一项。"""
+    merged = []
+    for row in rows or []:
+        match = None
+        for index, current in enumerate(merged):
+            if (_poi_name_related(row.get("name"), current.get("name"))
+                    or _distance_m(row.get("location"), current.get("location"))
+                    <= max_distance_m):
+                match = index
+                break
+        if match is None:
+            merged.append(dict(row))
+            continue
+        current = merged[match]
+        # 名称更长通常包含景区正式后缀；整体信息更完整时优先保留新记录。
+        row_score = len(str(row.get("name") or "")) + len(str(row.get("address") or ""))
+        current_score = (len(str(current.get("name") or ""))
+                         + len(str(current.get("address") or "")))
+        preferred = row if row_score > current_score else current
+        for key in ("name", "location", "area", "address"):
+            if preferred.get(key):
+                current[key] = preferred[key]
+        for key in ("location", "area", "address"):
+            if row.get(key) and not current.get(key):
+                current[key] = row[key]
+    return merged
 
 
 class AmapError(RuntimeError):
@@ -163,8 +231,7 @@ class AmapPOI(Provider):
             params["types"] = "110202|110203"
         data = _get("/place/text", params, timeout=self.timeout)
         rows = data.get("pois") or []
-        spots = []
-        points = []
+        cleaned_rows = []
         for row in rows:
             name = (row.get("name") or "").strip()
             if not name:
@@ -174,10 +241,17 @@ class AmapPOI(Provider):
             if isinstance(address, list):
                 address = "".join(str(x) for x in address)
             address = (address or "").strip()
+            cleaned_rows.append({"name": name, "location": row.get("location") or "",
+                                 "area": area, "address": address})
+        cleaned_rows = _merge_near_duplicate_pois(cleaned_rows)
+        spots = []
+        points = []
+        for item in cleaned_rows:
+            name, area, address = item["name"], item["area"], item["address"]
             tag = "（%s%s）" % (area, ("，" + address) if address else "")
             spots.append(name + tag)
-            if row.get("location"):
-                points.append({"name": name, "location": row.get("location"),
+            if item.get("location"):
+                points.append({"name": name, "location": item["location"],
                                "area": area, "address": address})
         if not spots:
             return make_unavailable(self.name, "高德没有返回可用景点：%s" % keywords,
@@ -258,8 +332,6 @@ class AmapHotelPOI(Provider):
             if (type_text.split(";")[0] or "").strip() != "住宿服务":
                 continue
             name = (row.get("name") or "").strip()
-            if not name:
-                continue
             if not is_lodging_name(name):
                 continue
             district = (row.get("adname") or "").strip()
@@ -326,7 +398,7 @@ class AmapFoodPOI(Provider):
             if (type_text.split(";")[0] or "").strip() != "餐饮服务":
                 continue
             name = (row.get("name") or "").strip()
-            if not name:
+            if not is_food_name(name):
                 continue
             district = (row.get("adname") or "").strip()
             address = row.get("address")

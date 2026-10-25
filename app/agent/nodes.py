@@ -28,6 +28,7 @@ from app.agent.store import (
     load_history,
     load_profile,
     memory_hint,
+    normalize_preferences,
     profile_hint,
     save_profile,
 )
@@ -343,6 +344,44 @@ def _intents_of(state) -> list:
         if intent is not Intent.CHITCHAT and intent not in out:
             out.append(intent)
     return out or [_as_intent(state.get("intent"))]
+
+
+def _apply_days_date_range(merged: dict, previous: dict, days: int,
+                           explicit_range: dict = None,
+                           explicit_date: str = None) -> bool:
+    """让 N 天行程/天气始终覆盖连续 N 天，用户明确日期优先。"""
+    try:
+        n = int(days)
+    except (TypeError, ValueError):
+        return False
+    if not (1 <= n <= 14):
+        return False
+
+    candidates = []
+    if explicit_range:
+        candidates.append(explicit_range.get("start_date") or explicit_range.get("date"))
+    if explicit_date:
+        candidates.append(explicit_date)
+    # LLM 常把“3天”猜成“明天开始”。没有本轮明确日期时，只继承
+    # 上轮已确认的起点；全新问题一律从今天起算。
+    candidates.extend([(previous or {}).get("start_date"), (previous or {}).get("date")])
+    if not (explicit_range or explicit_date):
+        candidates.append(_dt.date.today().isoformat())
+
+    start = None
+    for value in candidates:
+        try:
+            start = _dt.date.fromisoformat(str(value))
+            break
+        except (TypeError, ValueError):
+            continue
+    if start is None:
+        start = _dt.date.today()
+    merged["date"] = start.isoformat()
+    merged["start_date"] = start.isoformat()
+    merged["end_date"] = (start + _dt.timedelta(days=n - 1)).isoformat()
+    merged["days"] = n
+    return True
 
 
 def _is_weather_provider(provider: str) -> bool:
@@ -759,13 +798,12 @@ def classify_and_extract(state):
     active_intents = {intent}
     active_intents.update(_as_intent(task.get("intent")) for task in multi_tasks)
     needs_date_range = bool(active_intents & {Intent.WEATHER, Intent.ITINERARY})
-    if needs_date_range and not merged.get("end_date"):
+    if needs_date_range:
         n = merged.get("days")
         if isinstance(n, int) and 1 <= n <= 14:
-            today = _dt.date.today()
-            merged["date"] = merged.get("date") or today.isoformat()
-            merged["start_date"] = merged.get("start_date") or merged["date"]
-            merged["end_date"] = (today + _dt.timedelta(days=n - 1)).isoformat()
+            _apply_days_date_range(
+                merged, previous, n,
+                explicit_range=date_range, explicit_date=rule_date)
             stamp = now_iso()
             note = (note + "；" if note else "") + "按行程天数生成日期范围供天气查询"
 
@@ -1411,6 +1449,7 @@ def _quality_limitations(state: dict, used_citations: list) -> list:
     tools = [item for item in (state.get("tool_results") or [])
              if item.get("status") == _INT_TOOL_OK]
     has_transit = has_poi = has_hotel = has_food = has_hotel_distance = False
+    air_region_notes = []
     centers = []
     for item in tools:
         provider = str(item.get("provider") or "")
@@ -1432,6 +1471,10 @@ def _quality_limitations(state: dict, used_citations: list) -> list:
             has_hotel_distance = bool(data.get("酒店距离"))
         elif provider == "amap_poi_food_search":
             has_food = True
+        elif provider == "showapi_air_quality" and data.get("区域说明"):
+            note = str(data["区域说明"]).strip()
+            if note and note not in air_region_notes:
+                air_region_notes.append(note)
         center = data.get("检索中心") or data.get("区域")
         if provider in ("amap-poi", "amap_poi_hotel_search", "amap_poi_food_search"):
             if center and center not in centers:
@@ -1449,6 +1492,9 @@ def _quality_limitations(state: dict, used_citations: list) -> list:
             lines.append("本轮没有取得酒店与行程景点的完整坐标，无法计算“谁离景点更近”。")
     if has_food:
         lines.append("餐饮工具未返回评分、营业时间和人均价格，餐厅出现顺序不代表口味排名。")
+    for note in air_region_notes:
+        lines.append("%s；该数值不能代表目的地本地监测点%s。"
+                     % (note, mark("showapi_air_quality")))
     return list(dict.fromkeys(lines))
 
 
@@ -1475,6 +1521,7 @@ def _hotel_distance_appendix(state: dict, used_citations: list) -> str:
 
 
 def _profile_preference_notice(state: dict) -> str:
+    """Deprecated：偏好只注入模型排序上下文，不再在答案正文播报。"""
     prefs = list((state.get("profile") or {}).get("preferences") or [])
     if not prefs:
         return ""
@@ -1496,6 +1543,43 @@ def _destination_source_notice(state: dict) -> str:
         return ("当前问题没有指定城市，暂按跨会话最近关注的目的地%s回答。"
                 "如需换城市，请直接说明。\n\n" % city)
     return ""
+
+
+_PERIOD_LINE_RE = re.compile(
+    r"^\s*[-*]\s*(上午|下午|晚间)\s*[：:]\s*(.+?)\s*$")
+
+
+def _coalesce_same_attraction_periods(text: str) -> str:
+    """把同一景区的“上午景点 + 下午同景区继续”合并为一个连续时段。"""
+    out = []
+    for line in (text or "").splitlines():
+        match = _PERIOD_LINE_RE.match(line)
+        if not match or match.group(1) == "上午" or not out:
+            out.append(line)
+            continue
+        previous = _PERIOD_LINE_RE.match(out[-1])
+        if not previous:
+            out.append(line)
+            continue
+        current_name = re.split(r"[（，,。；;]", match.group(2), 1)[0].strip()
+        previous_name = re.split(r"[（，,。；;]", previous.group(2), 1)[0].strip()
+        same = (current_name.startswith(("同景区", "同一景区"))
+                or ("景区" in current_name and "继续游览" in current_name)
+                or (min(len(current_name), len(previous_name)) >= 4
+                    and (current_name.startswith(previous_name)
+                         or previous_name.startswith(current_name))))
+        if not same:
+            out.append(line)
+            continue
+        merged = re.sub(
+            r"^\s*[-*]\s*(上午|下午|晚间)\s*[：:]",
+            "- %s至%s：" % (previous.group(1), match.group(1)),
+            out[-1],
+            count=1,
+        ).rstrip("。；; ")
+        merged += "；同一景区连续游览，合并为一个景点，不重复计数。"
+        out[-1] = merged
+    return "\n".join(out)
 
 
 def _ensure_task_headings(text: str, state: dict) -> str:
@@ -1694,6 +1778,11 @@ def compose(state):
                     hint = (hint + "\n" if hint else "") + (
                         "回答住宿时要利用“酒店距离”，按到上一轮行程景点的最近直线距离说明便利性；"
                         "同时明确这是直线距离，不是驾车或公共交通耗时。")
+                if provider == "showapi_air_quality" and data.get("区域说明"):
+                    hint = (hint + "\n" if hint else "") + (
+                        "空气质量数据存在区域回退：%s。必须明确说明它不是目的地本地监测点，"
+                        "不能把上级行政区数值表述为当地实时空气。"
+                        % data.get("区域说明"))
             if len(tasks) > 1:
                 sections = "、".join(
                     "%s（%s）" % (task.get("query"), task.get("intent"))
@@ -1718,6 +1807,7 @@ def compose(state):
                 hint = (hint + "\n" if hint else "") + (
                     "行程必须使用固定骨架：## 第一天（主题），下分“上午/下午/晚间”，"
                     "每项写景点、建议时长和交通衔接；最后写费用小计。第二、三、四天同样结构。"
+                    "同一景区的不同名称变体或相邻 POI 只能出现一次，不得拆成上午/下午两个独立景点；"
                     "证据未覆盖的属性不要逐条写“待确认”，统一放到末尾“待确认事项”一次说明；"
                     "不得把合理建议伪装成已核实事实。")
             if state.get("thinking"):
@@ -1807,6 +1897,8 @@ def compose(state):
         degraded = True
     numbered, used = _number_citations("\n".join(kept), citations)
     numbered = _ensure_task_headings(numbered, state)
+    if Intent.ITINERARY in intents:
+        numbered = _coalesce_same_attraction_periods(numbered)
     hotel_distance_text = _hotel_distance_appendix(state, used)
     if hotel_distance_text and "酒店到行程景点距离" not in numbered:
         numbered += hotel_distance_text
@@ -1819,8 +1911,7 @@ def compose(state):
         numbered += ("\n\n说明（系统状态）：受当前证据限制，本轮输出为分日建议而非完整逐日行程。"
                      "缺口：%s。可补充落脚区域、必去景点或交通偏好后继续细化。"
                      % "、".join(completion_issues))
-    numbered = (_destination_source_notice(state)
-                + _profile_preference_notice(state) + numbered)
+    numbered = _destination_source_notice(state) + numbered
     return {
         "answer": _with_notes(numbered, unavailable),
         "citations": used,
@@ -1832,7 +1923,10 @@ def compose(state):
                               detail=note or "ok",
                               kept=len(kept), dropped=len(dropped), unbound=len(unbound),
                               placeholders=placeholder_count,
-                              binding_rate=rate, limitations=limitations)],
+                              binding_rate=rate, limitations=limitations,
+                              preference_hint=bool(hint and "偏好：" in hint),
+                              profile_preferences=normalize_preferences(
+                                  (state.get("profile") or {}).get("preferences")))],
     }
 
 

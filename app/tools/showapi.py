@@ -123,8 +123,9 @@ class ShowAPIAirQuality(Provider):
             code = ("city_not_supported"
                     if "ret_code=-1" in text else "showapi_business_error")
             return make_unavailable(self.name, text, code)
-        return make_ok(self.name, {
-            "城市": body.get("area") or city,
+        actual_area = str(body.get("area") or city).strip()
+        data = {
+            "城市": actual_area,
             "空气质量": body.get("quality") or "",
             "AQI": body.get("aqi") or "",
             "PM2.5": body.get("pm2_5") or "",
@@ -132,4 +133,10 @@ class ShowAPIAirQuality(Provider):
             "主要污染物": body.get("primary_pollutant") or "无",
             "更新时间": body.get("ct") or "",
             "数据来源": "万维易源 ShowAPI",
-        }, "获取成功", ttl=self.ttl)
+        }
+        if (actual_area and actual_area.rstrip("市区县")
+                != str(city).strip().rstrip("市区县")):
+            data["查询地名"] = city
+            data["监测区域"] = actual_area
+            data["区域说明"] = "%s（%s上级行政区，非本地监测点）" % (actual_area, city)
+        return make_ok(self.name, data, "获取成功", ttl=self.ttl)
