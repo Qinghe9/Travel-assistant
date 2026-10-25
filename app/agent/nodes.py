@@ -998,18 +998,50 @@ def retrieve(state):
     ev = retrieval.build_evidence(query, city=city, category=slots.get("category"),
                                   entity=slots.get("entity"))
     chunks = retrieval.to_chunks(ev)
+    extra_results = []
+    entity_trace = []
+    intents = set(_intents_of(state))
+    if city and intents.intersection((Intent.DESTINATION, Intent.ITINERARY)):
+        seen = set()
+        names = []
+        for chunk in chunks:
+            title = str(chunk.get("title") or "").strip()
+            if (title and title != city and 2 <= len(title) <= 30
+                    and title not in seen):
+                seen.add(title)
+                names.append(title)
+        provider = registry.get_provider("poi")
+        for name in names[:4]:
+            result = provider.run(city=city, entity=name)
+            extra_results.append(result)
+        if extra_results:
+            extra_evidence = registry.to_evidence(extra_results)
+            chunks.extend(extra_evidence)
+            entity_trace.append(trace_event(
+                "retrieve_rag_entities", 0,
+                detail="RAG实体反查高德：%s" % "、".join(names[:4]),
+                entities=names[:4],
+                ok=sum(result.status is ToolStatus.OK for result in extra_results)))
     detail = "RAG 补充命中 %d 条" % len(chunks)
     if ev.get("error"):
         detail += "；降级原因：%s" % str(ev["error"])[:80]
     return {
         "evidence": list(state.get("evidence") or []) + chunks,
-        "citations": list(state.get("citations") or []) + list(ev.get("citations") or []),
+        "citations": (list(state.get("citations") or []) + list(ev.get("citations") or [])
+                      + registry.to_citations([
+                          item for item in chunks if item.get("kind") == "tool"
+                          and item.get("source_id") not in {
+                              c.get("source_id") for c in (ev.get("citations") or [])}
+                      ])),
+        "tool_results": (list(state.get("tool_results") or [])
+                         + [dump(item) for item in extra_results]),
         "evidence_meta": retrieval.meta_of(ev),
         "trace": [trace_event("retrieve", _elapsed_ms(t0),
                               detail=detail + "（API 结果保留且优先）",
                               hits=len(chunks), degraded=bool(ev.get("degraded")),
                               phase="rag_supplement",
-                              tool_evidence_count=len(state.get("evidence") or []))],
+                              tool_evidence_count=len(state.get("evidence") or []))]
+                 + entity_trace,
     }
 
 
@@ -1434,8 +1466,24 @@ def _answer_completion_issues(state: dict, text: str) -> list:
         days = int((state.get("slots") or {}).get("days") or 0)
         labels = ["第一天", "第二天", "第三天", "第四天", "第五天"]
         need = labels[:min(max(days, 1), len(labels))]
-        if days and not all(label in content for label in need):
-            issues.append("缺少完整逐日结构")
+        if days:
+            for index, label in enumerate(need):
+                if label not in content:
+                    issues.append("缺少完整逐日结构")
+                    break
+                start = content.find(label)
+                end = content.find(need[index + 1], start) if index + 1 < len(need) else len(content)
+                segment = content[start:end if end > start else len(content)]
+                if not any(period in segment for period in ("上午", "下午", "晚间")):
+                    issues.append("%s缺少上午/下午/晚间时段" % label)
+                ranges = []
+                for match in re.finditer(
+                        r"(\d{1,2}:\d{2})\s*[-—~至]\s*(\d{1,2}:\d{2})",
+                        segment):
+                    ranges.append((match.group(1), match.group(2)))
+                ranges.sort()
+                if any(ranges[i][0] < ranges[i - 1][1] for i in range(1, len(ranges))):
+                    issues.append("%s存在时间重叠" % label)
     tasks = state.get("tasks") or []
     if len(tasks) > 1:
         for task in tasks:

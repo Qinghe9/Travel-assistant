@@ -104,6 +104,7 @@ class ShowAPIAirQuality(Provider):
     name = "showapi_air_quality"
     ttl = 1800
     timeout = 5.0
+    unsupported_areas = {"香港", "澳门", "台北"}
 
     def fetch(self, city: str = None):
         if not app_key():
@@ -111,7 +112,17 @@ class ShowAPIAirQuality(Provider):
                                     "no_api_key")
         if not city:
             return make_unavailable(self.name, "缺少城市参数", "bad_request")
-        body = _call("/104-42", {"area": city}, timeout=self.timeout)
+        if city in self.unsupported_areas:
+            return make_unavailable(
+                self.name, "%s暂不在 ShowAPI 空气质量城市覆盖范围" % city,
+                "city_not_supported")
+        try:
+            body = _call("/104-42", {"area": city}, timeout=self.timeout)
+        except ShowAPIError as exc:
+            text = str(exc)
+            code = ("city_not_supported"
+                    if "ret_code=-1" in text else "showapi_business_error")
+            return make_unavailable(self.name, text, code)
         return make_ok(self.name, {
             "城市": body.get("area") or city,
             "空气质量": body.get("quality") or "",

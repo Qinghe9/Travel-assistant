@@ -162,13 +162,13 @@ def run_for_intent(intent: Intent, slots: dict) -> list:
     return run_for_intents([intent], slots)
 
 
-def tool_source_id(provider: str, fetched_at: str) -> str:
+def tool_source_id(provider: str, fetched_at: str, hint: str = "") -> str:
     """工具证据的 source_id：sha1("tool:provider:时刻")[:12]。
 
     保持 12 位十六进制，与 RAG 层的引用校验正则兼容，
     这样 post_validate 不需要为工具证据写第二套规则。
     """
-    raw = "tool:%s:%s" % (provider, fetched_at or "")
+    raw = "tool:%s:%s:%s" % (provider, fetched_at or "", hint or "")
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -193,7 +193,8 @@ def to_evidence(results: list) -> list:
     for result in results:
         if result.status is not ToolStatus.OK:
             continue
-        sid = tool_source_id(result.provider, result.fetched_at)
+        hint = str((result.data or {}).get("_source_hint") or "")
+        sid = tool_source_id(result.provider, result.fetched_at, hint)
         out.append({
             "source_id": sid,
             "title": "工具：%s" % result.provider,

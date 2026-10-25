@@ -183,6 +183,7 @@ class AmapPOI(Provider):
         return make_ok(self.name, {
             "城市": city,
             "关键词": keywords,
+            "_source_hint": keywords,
             "检索中心": ("%s·%s" % (city, keywords)) if keywords else city,
             "景点": spots[:15],
             "_points": points[:15],
