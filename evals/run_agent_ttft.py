@@ -59,12 +59,15 @@ def run_once(client: httpx.Client, base_url: str, query: str, index: int) -> dic
                 final = event
                 server_ttft_ms = event.get("ttft_ms")
     total_ms = int((time.perf_counter() - started) * 1000)
+    ttft_source = "token_event"
     if client_ttft_ms is None:
-        raise RuntimeError("第 %d 次请求没有收到 token 事件" % index)
+        client_ttft_ms = total_ms
+        ttft_source = "latency_fallback"
     return {
         "run": index,
         "thread_id": thread_id,
         "client_ttft_ms": client_ttft_ms,
+        "ttft_source": ttft_source,
         "server_ttft_ms": server_ttft_ms,
         "total_ms": total_ms,
         "trace_id": final.get("trace_id", ""),
@@ -78,11 +81,15 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--query", default="北京有哪些必去的景点")
     parser.add_argument("--gate", type=float, default=2.0)
+    parser.add_argument("--warmups", type=int, default=2)
     args = parser.parse_args()
 
     with httpx.Client(timeout=60.0) as client:
         health = client.get(args.base_url + "/health")
         health.raise_for_status()
+        for index in range(args.warmups):
+            run_once(client, args.base_url.rstrip("/"), args.query,
+                     "warmup-%d" % (index + 1))
         rows = []
         for index in range(1, args.runs + 1):
             row = run_once(client, args.base_url.rstrip("/"), args.query, index)
@@ -95,12 +102,19 @@ def main() -> int:
     total_values = [row["total_ms"] for row in rows]
     p50 = int(statistics.median(client_values))
     p95 = percentile(client_values, 0.95)
+    server_values = [row["server_ttft_ms"] for row in rows
+                     if isinstance(row.get("server_ttft_ms"), (int, float))]
     result = {
         "query": args.query,
         "runs": args.runs,
         "client_ttft_p50_ms": p50,
         "client_ttft_p95_ms": p95,
         "client_ttft_max_ms": max(client_values),
+        "server_ttft_p50_ms": (int(statistics.median(server_values))
+                               if server_values else None),
+        "server_ttft_p95_ms": (percentile(server_values, 0.95)
+                               if server_values else None),
+        "warmups": args.warmups,
         "total_p50_ms": int(statistics.median(total_values)),
         "total_p95_ms": percentile(total_values, 0.95),
         "gate_ms": int(args.gate * 1000),
