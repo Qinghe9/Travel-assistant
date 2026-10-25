@@ -122,7 +122,9 @@ def geocode(address: str, city: str = None) -> dict:
         result = {
             "location": row.get("location", ""),
             "adcode": row.get("adcode", ""),
+            "province": row.get("province") or "",
             "city": row.get("city") or city or "",
+            "district": row.get("district") or "",
             "formatted_address": row.get("formatted_address", ""),
         }
         with _GEO_LOCK:
@@ -479,10 +481,26 @@ class AmapWeather(Provider):
     def fetch(self, city: str = None, date: str = None, end_date: str = None, days: int = None):
         if not city:
             return make_unavailable(self.name, "缺少城市参数", "bad_request")
-        geo = geocode(city)
-        adcode = geo.get("adcode")
+        from app.agent import geocode as place_geocode
+        trace = []
+        place = place_geocode.resolve_place(city, trace=trace)
+        if not place:
+            return make_unavailable(
+                self.name,
+                "未能解析地名“%s”的坐标，请确认地名或指定上级行政区" % city,
+                "place_not_found",
+            )
+        adcode = place.get("adcode")
         if not adcode:
-            return make_unavailable(self.name, "没有解析到城市编码：%s" % city, "no_adcode")
+            # GeoNames/scope 条目可能没有 adcode；仍可使用真实经纬度走 Open-Meteo，
+            # 不能因为供应商缺少 adcode 就丢弃已验证的坐标。
+            from app.tools.weather import OpenMeteoWeather
+            result = OpenMeteoWeather().fetch(
+                city=city, date=date, end_date=end_date, days=days)
+            if result.status.value == "ok":
+                result.data["高德天气降级说明"] = "该地名没有 adcode，已使用 Open-Meteo 坐标预报"
+            return result
+        resolved_city = place.get("name") or city
         if date:
             data = _get("/weather/weatherInfo", {
                 "city": adcode, "extensions": "all", "output": "JSON",
@@ -509,12 +527,13 @@ class AmapWeather(Provider):
                     return make_unavailable(self.name, "只能查询 %s 的预报" % window,
                                             "out_of_range")
                 return make_ok(self.name, {
-                    "城市": geo.get("city") or city,
+                    "城市": resolved_city,
                     "预报": ["%s：白天%s，夜间%s，%s~%s℃"
                              % (c.get("date"), c.get("dayweather"), c.get("nightweather"),
                                 c.get("nighttemp"), c.get("daytemp")) for c in picked_rows],
                     "发布时间": forecasts[0].get("reporttime") if forecasts else "",
                     "数据来源": "高德地图",
+                    "_geocode": {"source": place.get("source"), "attempts": trace},
                 }, "区间预报获取成功", ttl=self.ttl)
             picked = next((c for c in casts if c.get("date") == date), None)
             if picked is None:
@@ -522,7 +541,7 @@ class AmapWeather(Provider):
                 return make_unavailable(self.name, "只能查询 %s 的预报" % window,
                                         "out_of_range")
             return make_ok(self.name, {
-                "城市": geo.get("city") or city,
+                "城市": resolved_city,
                 "日期": picked.get("date"),
                 "白天天气": picked.get("dayweather"),
                 "夜间天气": picked.get("nightweather"),
@@ -532,6 +551,7 @@ class AmapWeather(Provider):
                 "白天风力": picked.get("daypower"),
                 "发布时间": forecasts[0].get("reporttime") if forecasts else "",
                 "数据来源": "高德地图",
+                "_geocode": {"source": place.get("source"), "attempts": trace},
             }, "预报获取成功", ttl=self.ttl)
 
         data = _get("/weather/weatherInfo", {
@@ -550,4 +570,5 @@ class AmapWeather(Provider):
             "湿度(%)": live.get("humidity"),
             "发布时间": live.get("reporttime"),
             "数据来源": "高德地图",
+            "_geocode": {"source": place.get("source"), "attempts": trace},
         }, "实况获取成功", ttl=self.ttl)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as _dt
 
+from app.agent.geocode import resolve_place
 from app.tools.base import Provider, make_ok, make_unavailable
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
@@ -48,17 +49,23 @@ class OpenMeteoWeather(Provider):
         # 行程规划只传 days 时，从今天起展开多日预报，不能退化成单日。
         if not date and days and int(days) > 1:
             date = _dt.date.today().isoformat()
+        trace = []
+        place = resolve_place(city, trace=trace)
+        if not place or place.get("lat") is None or place.get("lon") is None:
+            return make_unavailable(
+                self.name,
+                "未能解析地名“%s”的坐标，请确认地名或指定上级行政区" % city,
+                "place_not_found",
+            )
         try:
             import httpx
         except ImportError:
             return make_unavailable(self.name, "缺少 httpx 依赖：pip install httpx", "no_dependency")
-        geo = httpx.get(GEOCODE_URL,
-                        params={"name": city, "count": 1, "language": "zh"},
-                        timeout=self.timeout).json()
-        results = geo.get("results") or []
-        if not results:
-            return make_unavailable(self.name, "没有找到城市：%s" % city, "city_not_found")
-        loc = results[0]
+        loc = {
+            "latitude": place["lat"], "longitude": place["lon"],
+            "name": place.get("name") or city,
+            "admin1": place.get("province") or "",
+        }
         need = 7
         try:
             if date and end_date:
@@ -107,6 +114,10 @@ class OpenMeteoWeather(Provider):
                 "预报": ["%s：%s，最高 %s℃，最低 %s℃，降水概率 %s%%"
                          % (r[0], describe(r[3]), r[1], r[2], r[4]) for r in picked_rows],
                 "数据来源": "Open-Meteo",
+                "_geocode": {"source": place.get("source"),
+                             "city": place.get("city"),
+                             "county": place.get("county"),
+                             "attempts": trace},
             }, "区间预报获取成功", ttl=self.ttl)
 
         target = date or _dt.date.today().isoformat()
@@ -128,5 +139,9 @@ class OpenMeteoWeather(Provider):
             "降水概率(%)": picked[4],
             "当前温度(℃)": current.get("temperature_2m"),
             "数据来源": "Open-Meteo",
+            "_geocode": {"source": place.get("source"),
+                         "city": place.get("city"),
+                         "county": place.get("county"),
+                         "attempts": trace},
         }
         return make_ok(self.name, data, "预报获取成功", ttl=self.ttl)

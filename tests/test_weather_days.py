@@ -13,12 +13,13 @@ class Response:
 
 def test_weather_days_without_date_returns_multi_day(monkeypatch):
     calls = []
+    monkeypatch.setattr(weather, "resolve_place", lambda name, trace=None: {
+        "name": "澳门", "province": "澳门", "city": "澳门", "county": "",
+        "adcode": "820000", "lat": 22.2, "lon": 113.5, "source": "scope",
+    })
 
     def fake_get(url, params=None, timeout=None):
         calls.append(params)
-        if url == weather.GEOCODE_URL:
-            return Response({"results": [{"latitude": 22.2, "longitude": 113.5,
-                                          "name": "澳门", "admin1": ""}]})
         days = params["forecast_days"]
         start = __import__("datetime").date.today()
         dates = [(start + __import__("datetime").timedelta(days=i)).isoformat()
