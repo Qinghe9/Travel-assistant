@@ -191,6 +191,7 @@ class AgentReply(BaseModel):
     intent_label: str = ""
     confidence: float = 0.0
     slots: dict = Field(default_factory=dict)
+    destination_source: str = ""
     missing: list[str] = Field(default_factory=list)
     answer: str = ""
     citations: list[dict] = Field(default_factory=list)

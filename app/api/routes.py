@@ -47,6 +47,7 @@ def _reply_from_state(state: dict, trace_id: str) -> dict:
         "tasks": state.get("tasks") or [],
         "confidence": state.get("confidence", 0.0),
         "slots": state.get("slots") or {},
+        "destination_source": state.get("destination_source", ""),
         "missing": state.get("missing") or [],
         "answer": state.get("answer", ""),
         "citations": state.get("citations") or [],

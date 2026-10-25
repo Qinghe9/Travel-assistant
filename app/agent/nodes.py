@@ -350,6 +350,15 @@ def _is_weather_provider(provider: str) -> bool:
     return name in ("open-meteo", "amap-weather", "weather") or "weather" in name
 
 
+_DESTINATION_REFERENCE_WORDS = (
+    "那里", "那边", "这个地方", "该地", "上述", "前面提到", "刚才提到",
+)
+
+
+def _has_destination_reference(text: str) -> bool:
+    return any(word in (text or "") for word in _DESTINATION_REFERENCE_WORDS)
+
+
 def _is_memory_recall_query(text: str) -> bool:
     asks_history = (
         any(w in text for w in ("之前", "以前", "上次", "历史记录", "历史对话",
@@ -422,6 +431,7 @@ def normalize_input(state):
         "normalized_query": "",
         "user_id": user_id,
         "profile": profile,
+        "destination_source": "",
         "follow_up": "",
         "evidence": [],
         "citations": [],
@@ -454,6 +464,7 @@ def classify_and_extract(state):
             "tasks": [],
             "confidence": 1.0,
             "slots": slots_out,
+            "destination_source": "memory",
             "missing": [],
             "pending_intent": "",
             "pending_missing": [],
@@ -477,6 +488,7 @@ def classify_and_extract(state):
             "tasks": list(last_turn.get("tasks") or []),
             "confidence": 1.0,
             "slots": dict(last_turn.get("slots") or {}),
+            "destination_source": last_turn.get("destination_source", ""),
             "missing": [],
             "pending_intent": "",
             "pending_missing": [],
@@ -500,6 +512,7 @@ def classify_and_extract(state):
             "tasks": list(last_turn.get("tasks") or []),
             "confidence": 1.0,
             "slots": dict(last_turn.get("slots") or {}),
+            "destination_source": last_turn.get("destination_source", ""),
             "missing": [],
             "pending_intent": "",
             "pending_missing": [],
@@ -521,6 +534,7 @@ def classify_and_extract(state):
             "intent": prior_intent.value,
             "confidence": 1.0,
             "slots": dict(last_turn.get("slots") or {}),
+            "destination_source": last_turn.get("destination_source", ""),
             "missing": [],
             "pending_intent": "",
             "pending_missing": [],
@@ -537,6 +551,8 @@ def classify_and_extract(state):
         }
 
     previous = dict(state.get("slots") or {})
+    thread_destination = (previous.get("destination")
+                          or previous.get("target_city") or "")
     stamp = state.get("date_updated_at") or ""
     expired = False
     if any(previous.get(k) for k in ("date", "start_date", "end_date")) and date_is_stale(stamp):
@@ -671,6 +687,21 @@ def classify_and_extract(state):
         last_intent=str(last_turn.get("intent") or ""),
     )
     merged = slot_lib.merge_slots(previous, incoming, new_city=incoming.get("destination"))
+    destination_reference = _has_destination_reference(text)
+    text_city = (slot_lib.detect_city(text)
+                 or (rule_result.get("slots") or {}).get("destination"))
+    if destination_reference:
+        # “那里/那边”本身不是本轮明确城市；LLM 补出的值只能视为上下文承接。
+        explicit_city = text_city
+    else:
+        explicit_city = (incoming.get("destination") or incoming.get("target_city")
+                         or text_city)
+    destination_source = ""
+    if merged.get("destination"):
+        if explicit_city:
+            destination_source = "current"
+        elif thread_destination and merged.get("destination") == thread_destination:
+            destination_source = "thread"
     # 规则式日期优先：用户说“明天/后天/10月20日”时，以本地解析结果覆盖模型输出
     date_range = slot_lib.parse_date_range(text)
     rule_date = slot_lib.parse_date(text)
@@ -711,9 +742,19 @@ def classify_and_extract(state):
     if province:
         merged["province"] = province
 
-    if not merged.get("destination") and profile.get("destination") and not province:
+    ambiguous_destination_reference = bool(
+        destination_reference and not explicit_city and not thread_destination)
+    if ambiguous_destination_reference and destination_source not in ("thread", "current"):
+        merged.pop("destination", None)
+        destination_source = ""
+    if (not merged.get("destination") and profile.get("destination")
+            and not province and not ambiguous_destination_reference):
         merged["destination"] = profile["destination"]
+        destination_source = "profile"
         note = (note + "；" if note else "") + "沿用跨会话目的地"
+    elif ambiguous_destination_reference:
+        note = (note + "；" if note else "") + (
+            "“那里”缺少当前会话指代，未使用跨会话城市猜测")
     if not merged.get("start_city") and profile.get("start_city"):
         merged["start_city"] = profile["start_city"]
 
@@ -742,6 +783,8 @@ def classify_and_extract(state):
         missing = missing_slots(intent, merged, text)
     if province_needs_city:
         missing = ["destination_city"]
+    elif ambiguous_destination_reference and "destination" not in missing:
+        missing.append("destination")
     pending_out = intent.value if missing else ""
     urgent = bool(jev_result.get("urgent")) if jev_result else False
     emotion = jev_result.get("emotion") if jev_result else None
@@ -752,6 +795,7 @@ def classify_and_extract(state):
         "normalized_query": normalized_query or text,
         "confidence": result["confidence"],
         "slots": merged,
+        "destination_source": destination_source,
         "missing": missing,
         "pending_intent": pending_out,
         "pending_missing": missing,
@@ -1306,6 +1350,20 @@ def _profile_preference_notice(state: dict) -> str:
     return "已结合你之前的长期偏好：%s。\n\n" % "、".join(prefs[:6])
 
 
+def _destination_source_notice(state: dict) -> str:
+    source = state.get("destination_source") or ""
+    city = (state.get("slots") or {}).get("destination")
+    if not city:
+        return ""
+    if source == "thread" and _has_destination_reference(state.get("query") or ""):
+        return ("你问的“那里”按当前会话最近提到的%s理解。"
+                "如果你指的是其他城市，请直接告诉我城市名。\n\n" % city)
+    if source == "profile":
+        return ("当前问题没有指定城市，暂按跨会话最近关注的目的地%s回答。"
+                "如需换城市，请直接说明。\n\n" % city)
+    return ""
+
+
 def _ensure_task_headings(text: str, state: dict) -> str:
     """按任务自动插入稳定小标题，避免模型输出格式漂移。"""
     tasks = state.get("tasks") or []
@@ -1584,7 +1642,8 @@ def compose(state):
     if completion_issues:
         numbered += ("\n\n完整性提示：本稿仍存在 %s，建议缩短问题范围或补充条件后重试。"
                      % "、".join(completion_issues))
-    numbered = _profile_preference_notice(state) + numbered
+    numbered = (_destination_source_notice(state)
+                + _profile_preference_notice(state) + numbered)
     return {
         "answer": _with_notes(numbered, unavailable),
         "citations": used,
@@ -1615,6 +1674,7 @@ def persist(state):
             "intents": list(state.get("intents") or []),
             "tasks": list(state.get("tasks") or []),
             "slots": dict(state.get("slots") or {}),
+            "destination_source": state.get("destination_source", ""),
             "answer": state.get("answer", ""),
             "citations": list(state.get("citations") or []),
             "tool_results": list(state.get("tool_results") or []),
@@ -1635,6 +1695,7 @@ def persist(state):
         "intents": list(state.get("intents") or []),
         "tasks": list(state.get("tasks") or []),
         "slots": dict(state.get("slots") or {}),
+        "destination_source": state.get("destination_source", ""),
         "route_source": state.get("route_source", ""),
         "citations": list(state.get("citations") or []),
         "tool_results": list(state.get("tool_results") or []),
@@ -1653,6 +1714,7 @@ def persist(state):
             "normalized_query": state.get("normalized_query", ""),
             "intent": state.get("intent", ""),
             "slots": state.get("slots") or {},
+            "destination_source": state.get("destination_source", ""),
             "missing": state.get("missing") or [],
             "answer": state.get("answer", ""),
             "citations": [c.get("source_id") for c in (state.get("citations") or [])],

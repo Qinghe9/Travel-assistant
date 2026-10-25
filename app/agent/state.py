@@ -30,6 +30,7 @@ class AgentState(TypedDict, total=False):
     tasks: list
     confidence: float
     slots: dict
+    destination_source: str
     missing: list
     pending_intent: str
     pending_missing: list

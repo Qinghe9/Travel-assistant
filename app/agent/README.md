@@ -129,6 +129,9 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 - 酒店结果过滤洗头、足浴、按摩等被供应商误标成“住宿服务”的商户；
 - 证据绑定率低于 70% 标记降级并写入限制说明；
 - 长期记忆保存目的地时间线，新会话区分“最近一次”和“此前”；套用长期偏好时显式提示。
+- 目的地优先级为：本轮原文明确城市 > 当前会话最近城市 > 跨会话最近城市。只有前两者可用于
+  承接“那里/那边”；新会话孤立使用“那里”时会追问，不拿长期记忆猜城市。
+- `destination_source` 记录 `current/thread/profile/memory`，答案会明确说明“那里”被理解为哪个城市。
 
 浏览器 `localStorage` 里已有的旧会话会在打开 `/demo` 时通过
 `POST /api/v1/memory/import` 幂等补录。`GET /api/v1/profile/{user_id}/memory`

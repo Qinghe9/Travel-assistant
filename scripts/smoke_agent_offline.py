@@ -270,6 +270,15 @@ check("当天天气清除旧的三天区间",
       and "end_date" not in (_s_today.get("slots") or {}),
       str(_s_today.get("slots")))
 
+_ref_thread = "destination-thread-reference"
+run("帮我查未来七天无锡的天气", _ref_thread)
+_s_ref = run("我去那里游玩，有什么注意事项？", _ref_thread)
+check("同会话“那里”承接无锡并透明提示",
+      (_s_ref.get("slots") or {}).get("destination") == "无锡"
+      and _s_ref.get("destination_source") == "thread"
+      and "当前会话最近提到的无锡" in (_s_ref.get("answer") or ""),
+      "%s / %s" % (_s_ref.get("destination_source"), _s_ref.get("answer")[:80]))
+
 # 0e) Jev 决策路由：覆盖意图、写入紧急度；失败自动回退
 from app.agent import jev as jev_mod  # noqa: E402
 _real_jev_available, _real_jev_decide = jev_mod.available, jev_mod.decide
@@ -397,6 +406,20 @@ check("未明确规划时不强制追问天数",
       _s_guard.get("intents") == ["INT-01", "INT-03", "INT-05"]
       and "ask_clarify" not in nodes_of(_s_guard),
       "%s / %s" % (_s_guard.get("intents"), _s_guard.get("missing")))
+
+_llm_ref_thread = "llm-destination-reference"
+llm_mod.available = lambda: False
+run("帮我查未来七天无锡的天气", _llm_ref_thread)
+llm_mod.available = lambda: True
+llm_mod.chat_json = lambda messages, schema, **kwargs: (
+    SimpleNamespace(intent="INT-01", confidence=0.75,
+                    slots={"destination": "无锡"}), "")
+_s_llm_ref = run("我去那里游玩，有什么注意事项？", _llm_ref_thread)
+check("LLM补全指代仍标记为同会话承接",
+      _s_llm_ref.get("destination_source") == "thread"
+      and "当前会话最近提到的无锡" in (_s_llm_ref.get("answer") or ""),
+      "%s / %s" % (_s_llm_ref.get("destination_source"),
+                   (_s_llm_ref.get("answer") or "")[:80]))
 llm_mod.chat_json = _real_plan_json
 llm_mod.chat_stream = _real_plan_stream
 llm_mod.available = _real_plan_available
@@ -626,6 +649,18 @@ check("记忆区分最新与历史目的地",
       "最近一次" in _recall_text and "北京" in _recall_text
       and "此前" in _recall_text and "广州" in _recall_text,
       _recall_text)
+_s_ambiguous = run("我去那里游玩，有什么注意事项？", "ambiguous-new-thread", _memory_user)
+check("新会话孤立指代不拿长期记忆猜城市",
+      "ask_clarify" in nodes_of(_s_ambiguous)
+      and "destination" in (_s_ambiguous.get("missing") or [])
+      and "destination" not in (_s_ambiguous.get("slots") or {}),
+      "%s / %s" % (_s_ambiguous.get("missing"), _s_ambiguous.get("slots")))
+_s_explicit_city = run("我去杭州游玩，有什么注意事项？", "explicit-city-thread", _memory_user)
+check("本轮明确城市覆盖长期记忆",
+      (_s_explicit_city.get("slots") or {}).get("destination") == "杭州"
+      and _s_explicit_city.get("destination_source") == "current",
+      "%s / %s" % ((_s_explicit_city.get("slots") or {}).get("destination"),
+                   _s_explicit_city.get("destination_source")))
 clear_profile(_memory_user)
 check("清除长期记忆同时清空历史",
       load_profile(_memory_user) == {} and load_history(_memory_user) == [],

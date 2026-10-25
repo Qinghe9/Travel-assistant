@@ -69,6 +69,7 @@ async def astream_answer(agent, inputs: dict, config: dict):
         "tasks": final_state.get("tasks") or [],
         "confidence": final_state.get("confidence", 0.0),
         "slots": final_state.get("slots") or {},
+        "destination_source": final_state.get("destination_source", ""),
         "missing": final_state.get("missing") or [],
         "answer": final_state.get("answer", ""),
         "citations": citations,
