@@ -24,7 +24,7 @@ evals/                 检索评测脚本 + 评测集（Recall@3 / MRR / nDCG / 
 
 ```bash
 # 1) 依赖
-python -m pip install -r requirements-rag.txt
+python -m pip install -r requirements.txt
 
 # 2) 配置（复制模板后填密钥；.env 不会被提交）
 cp .env.example .env

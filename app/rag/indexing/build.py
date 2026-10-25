@@ -52,7 +52,7 @@ def _require_deps():
         except ImportError:
             missing.append(pkg)
     if missing:
-        raise SystemExit("缺少依赖：%s\n请先安装：pip install -r requirements-rag.txt\n"
+        raise SystemExit("缺少依赖：%s\n请先安装：pip install -r requirements.txt\n"
                          "（注意：要在你运行脚本的那个 Python 环境里装）" % "、".join(missing))
 
 

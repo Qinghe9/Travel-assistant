@@ -148,7 +148,7 @@ app/agent/streaming.py   LangGraph 执行过程 → SSE 事件（meta/step/token
 
 ```bash
 # 依赖（RAG 层依赖也要装）
-python -m pip install -r requirements-rag.txt -r requirements-agent.txt
+python -m pip install -r requirements.txt
 
 # 单轮
 python scripts/run_agent.py "帮我规划3天西安行程"
