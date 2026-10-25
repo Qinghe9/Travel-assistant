@@ -43,3 +43,7 @@ jobs:
           pip install -r requirements.txt
       - name: 数据源适配器 / 清洗 / 切分 / 融合 冒烟
         run: python scripts/smoke_fetch_offline.py
+      - name: Agent / API 离线冒烟
+        run: |
+          python scripts/smoke_agent_offline.py
+          python scripts/smoke_api_offline.py
