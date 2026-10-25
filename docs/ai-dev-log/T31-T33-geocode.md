@@ -57,3 +57,5 @@ python -m pytest tests/test_geocode.py tests/test_weather_coverage.py tests/test
 | 贵州3天行程 | INT-02；destination=贵阳；source=province_default；POI 中心=贵阳 |
 
 复测中所有工具的检索中心都落在用户给出的市/县，没有再退化为泛化搜索。
+额外验证“婺源住哪里”和“婺源有什么美食”：酒店、餐饮工具均返回
+`status=ok`，`city/检索中心/区域` 全部为“婺源”，source=scope。
