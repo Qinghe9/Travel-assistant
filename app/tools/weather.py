@@ -45,6 +45,9 @@ class OpenMeteoWeather(Provider):
     def fetch(self, city: str = None, date: str = None, end_date: str = None, days: int = None):
         if not city:
             return make_unavailable(self.name, "缺少城市参数", "bad_request")
+        # 行程规划只传 days 时，从今天起展开多日预报，不能退化成单日。
+        if not date and days and int(days) > 1:
+            date = _dt.date.today().isoformat()
         try:
             import httpx
         except ImportError:
