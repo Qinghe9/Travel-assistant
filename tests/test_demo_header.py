@@ -9,3 +9,5 @@ def test_demo_header_is_simplified():
     assert "Swagger 文档" not in DEMO_HTML
     assert 'id="prefsChip"' not in DEMO_HTML
     assert "setPrefs" not in DEMO_HTML
+    assert "SSE 流式输出" not in DEMO_HTML
+    assert 'class="hint"' not in DEMO_HTML

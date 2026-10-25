@@ -170,7 +170,6 @@ sup.cite a:hover{text-decoration:underline}
       font-size:17px;cursor:pointer;display:grid;place-items:center}
 .send:hover{background:var(--blue-dark)}
 .send:disabled{opacity:.4;cursor:not-allowed}
-.hint{max-width:860px;margin:7px auto 0;text-align:center;font-size:10.5px;color:#93a6b0}
 @media (max-width:900px){
   .app{grid-template-columns:1fr}
   .sidebar{position:fixed;z-index:20;top:0;bottom:0;left:0;width:282px;
@@ -319,7 +318,6 @@ DEMO_HTML = """<!doctype html>
           <button class="send" id="send" aria-label="发送" disabled>↑</button>
         </div>
       </div>
-      <p class="hint">SSE 流式输出 · 左侧会话保存在本地 · 同一会话保持上下文</p>
     </div>
   </main>
 </div>
