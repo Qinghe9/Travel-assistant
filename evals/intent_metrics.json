@@ -1,0 +1,84 @@
+{
+  "mode": "offline",
+  "count": 210,
+  "macro_accuracy": 1.0,
+  "accuracy": {
+    "INT-01": 1.0,
+    "INT-02": 1.0,
+    "INT-03": 1.0,
+    "INT-04": 1.0,
+    "INT-05": 1.0,
+    "INT-06": 1.0,
+    "INT-07": 1.0
+  },
+  "confusion_matrix": {
+    "INT-01": {
+      "INT-01": 30
+    },
+    "INT-02": {
+      "INT-02": 30
+    },
+    "INT-03": {
+      "INT-03": 30
+    },
+    "INT-04": {
+      "INT-04": 30
+    },
+    "INT-05": {
+      "INT-05": 30
+    },
+    "INT-06": {
+      "INT-06": 30
+    },
+    "INT-07": {
+      "INT-07": 30
+    }
+  },
+  "slot_metrics": {
+    "category": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "destination": {
+      "precision": 0.8333,
+      "recall": 1.0,
+      "f1": 0.9091
+    },
+    "days": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "start_city": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "target_city": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "origin": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "destination_place": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "entity": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "date": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    }
+  }
+}

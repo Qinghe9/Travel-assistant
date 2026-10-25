@@ -1,0 +1,210 @@
+{"query": "北京有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "北京"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划2天北京行程", "expected_intent": "INT-02", "expected_slots": {"destination": "北京", "days": 2}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从广州到北京怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "广州", "destination_place": "北京"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "北京住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "北京"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "北京有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "北京"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天北京天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "北京"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你好", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "上海有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "上海"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划3天上海行程", "expected_intent": "INT-02", "expected_slots": {"destination": "上海", "days": 3}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从深圳到上海怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "深圳", "destination_place": "上海"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "上海住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "上海"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "上海有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "上海"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天上海天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "上海"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "谢谢", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "广州有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "广州"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划4天广州行程", "expected_intent": "INT-02", "expected_slots": {"destination": "广州", "days": 4}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从北京到广州怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "北京", "destination_place": "广州"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "广州住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "广州"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "广州有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "广州"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天广州天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "广州"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你能做什么", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "深圳有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "深圳"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划5天深圳行程", "expected_intent": "INT-02", "expected_slots": {"destination": "深圳", "days": 5}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从上海到深圳怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "上海", "destination_place": "深圳"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "深圳住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "深圳"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "深圳有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "深圳"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天深圳天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "深圳"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "再见", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "杭州有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "杭州"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划2天杭州行程", "expected_intent": "INT-02", "expected_slots": {"destination": "杭州", "days": 2}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从杭州到杭州怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "杭州", "destination_place": "杭州"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "杭州住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "杭州"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "杭州有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "杭州"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天杭州天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "杭州"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "在吗", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "成都有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "成都"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划3天成都行程", "expected_intent": "INT-02", "expected_slots": {"destination": "成都", "days": 3}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从成都到成都怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "成都", "destination_place": "成都"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "成都住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "成都"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "成都有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "成都"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天成都天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "成都"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你好", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "西安有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "西安"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划4天西安行程", "expected_intent": "INT-02", "expected_slots": {"destination": "西安", "days": 4}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从西安到西安怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "西安", "destination_place": "西安"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "西安住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "西安"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "西安有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "西安"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天西安天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "西安"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "谢谢", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "重庆有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "重庆"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划5天重庆行程", "expected_intent": "INT-02", "expected_slots": {"destination": "重庆", "days": 5}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从南京到重庆怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "南京", "destination_place": "重庆"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "重庆住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "重庆"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "重庆有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "重庆"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天重庆天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "重庆"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你能做什么", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "南京有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "南京"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划2天南京行程", "expected_intent": "INT-02", "expected_slots": {"destination": "南京", "days": 2}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从武汉到南京怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "武汉", "destination_place": "南京"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "南京住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "南京"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "南京有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "南京"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天南京天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "南京"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "再见", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "武汉有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "武汉"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划3天武汉行程", "expected_intent": "INT-02", "expected_slots": {"destination": "武汉", "days": 3}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从长沙到武汉怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "长沙", "destination_place": "武汉"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "武汉住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "武汉"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "武汉有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "武汉"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天武汉天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "武汉"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "在吗", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "长沙有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "长沙"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划4天长沙行程", "expected_intent": "INT-02", "expected_slots": {"destination": "长沙", "days": 4}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从广州到长沙怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "广州", "destination_place": "长沙"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "长沙住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "长沙"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "长沙有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "长沙"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天长沙天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "长沙"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你好", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "苏州有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "苏州"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划5天苏州行程", "expected_intent": "INT-02", "expected_slots": {"destination": "苏州", "days": 5}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从深圳到苏州怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "深圳", "destination_place": "苏州"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "苏州住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "苏州"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "苏州有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "苏州"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天苏州天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "苏州"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "谢谢", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "厦门有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "厦门"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划2天厦门行程", "expected_intent": "INT-02", "expected_slots": {"destination": "厦门", "days": 2}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从北京到厦门怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "北京", "destination_place": "厦门"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "厦门住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "厦门"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "厦门有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "厦门"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天厦门天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "厦门"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你能做什么", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "青岛有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "青岛"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划3天青岛行程", "expected_intent": "INT-02", "expected_slots": {"destination": "青岛", "days": 3}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从上海到青岛怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "上海", "destination_place": "青岛"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "青岛住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "青岛"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "青岛有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "青岛"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天青岛天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "青岛"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "再见", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "天津有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "天津"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划4天天津行程", "expected_intent": "INT-02", "expected_slots": {"destination": "天津", "days": 4}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从杭州到天津怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "杭州", "destination_place": "天津"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "天津住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "天津"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "天津有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "天津"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天天津天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "天津"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "在吗", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "昆明有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "昆明"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划5天昆明行程", "expected_intent": "INT-02", "expected_slots": {"destination": "昆明", "days": 5}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从成都到昆明怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "成都", "destination_place": "昆明"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "昆明住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "昆明"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "昆明有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "昆明"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天昆明天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "昆明"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你好", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "大理有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "大理"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划2天大理行程", "expected_intent": "INT-02", "expected_slots": {"destination": "大理", "days": 2}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从西安到大理怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "西安", "destination_place": "大理"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "大理住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "大理"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "大理有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "大理"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天大理天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "大理"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "谢谢", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "丽江有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "丽江"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划3天丽江行程", "expected_intent": "INT-02", "expected_slots": {"destination": "丽江", "days": 3}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从南京到丽江怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "南京", "destination_place": "丽江"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "丽江住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "丽江"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "丽江有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "丽江"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天丽江天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "丽江"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你能做什么", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "桂林有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "桂林"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划4天桂林行程", "expected_intent": "INT-02", "expected_slots": {"destination": "桂林", "days": 4}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从武汉到桂林怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "武汉", "destination_place": "桂林"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "桂林住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "桂林"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "桂林有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "桂林"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天桂林天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "桂林"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "再见", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "三亚有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "三亚"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划5天三亚行程", "expected_intent": "INT-02", "expected_slots": {"destination": "三亚", "days": 5}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从长沙到三亚怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "长沙", "destination_place": "三亚"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "三亚住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "三亚"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "三亚有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "三亚"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天三亚天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "三亚"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "在吗", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "哈尔滨有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "哈尔滨"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划2天哈尔滨行程", "expected_intent": "INT-02", "expected_slots": {"destination": "哈尔滨", "days": 2}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从广州到哈尔滨怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "广州", "destination_place": "哈尔滨"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "哈尔滨住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "哈尔滨"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "哈尔滨有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "哈尔滨"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天哈尔滨天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "哈尔滨"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你好", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "沈阳有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "沈阳"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划3天沈阳行程", "expected_intent": "INT-02", "expected_slots": {"destination": "沈阳", "days": 3}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从深圳到沈阳怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "深圳", "destination_place": "沈阳"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "沈阳住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "沈阳"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "沈阳有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "沈阳"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天沈阳天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "沈阳"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "谢谢", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "济南有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "济南"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划4天济南行程", "expected_intent": "INT-02", "expected_slots": {"destination": "济南", "days": 4}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从北京到济南怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "北京", "destination_place": "济南"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "济南住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "济南"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "济南有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "济南"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天济南天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "济南"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你能做什么", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "郑州有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "郑州"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划5天郑州行程", "expected_intent": "INT-02", "expected_slots": {"destination": "郑州", "days": 5}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从上海到郑州怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "上海", "destination_place": "郑州"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "郑州住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "郑州"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "郑州有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "郑州"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天郑州天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "郑州"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "再见", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "合肥有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "合肥"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划2天合肥行程", "expected_intent": "INT-02", "expected_slots": {"destination": "合肥", "days": 2}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从杭州到合肥怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "杭州", "destination_place": "合肥"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "合肥住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "合肥"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "合肥有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "合肥"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天合肥天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "合肥"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "在吗", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "福州有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "福州"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划3天福州行程", "expected_intent": "INT-02", "expected_slots": {"destination": "福州", "days": 3}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从成都到福州怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "成都", "destination_place": "福州"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "福州住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "福州"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "福州有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "福州"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天福州天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "福州"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你好", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "南昌有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "南昌"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划4天南昌行程", "expected_intent": "INT-02", "expected_slots": {"destination": "南昌", "days": 4}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从西安到南昌怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "西安", "destination_place": "南昌"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "南昌住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "南昌"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "南昌有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "南昌"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天南昌天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "南昌"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "谢谢", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "南宁有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "南宁"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划5天南宁行程", "expected_intent": "INT-02", "expected_slots": {"destination": "南宁", "days": 5}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从南京到南宁怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "南京", "destination_place": "南宁"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "南宁住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "南宁"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "南宁有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "南宁"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天南宁天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "南宁"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "你能做什么", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "贵阳有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "贵阳"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划2天贵阳行程", "expected_intent": "INT-02", "expected_slots": {"destination": "贵阳", "days": 2}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从武汉到贵阳怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "武汉", "destination_place": "贵阳"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "贵阳住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "贵阳"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "贵阳有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "贵阳"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天贵阳天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "贵阳"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "再见", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
+{"query": "兰州有什么好玩的景点", "expected_intent": "INT-01", "expected_slots": {"destination": "兰州"}, "source": "synthetic-template-v1", "type": "destination"}
+{"query": "帮我规划3天兰州行程", "expected_intent": "INT-02", "expected_slots": {"destination": "兰州", "days": 3}, "source": "synthetic-template-v1", "type": "itinerary"}
+{"query": "从长沙到兰州怎么走", "expected_intent": "INT-03", "expected_slots": {"origin": "长沙", "destination_place": "兰州"}, "source": "synthetic-template-v1", "type": "transport"}
+{"query": "兰州住哪里酒店", "expected_intent": "INT-04", "expected_slots": {"destination": "兰州"}, "source": "synthetic-template-v1", "type": "hotel"}
+{"query": "兰州有什么特色美食", "expected_intent": "INT-05", "expected_slots": {"destination": "兰州"}, "source": "synthetic-template-v1", "type": "food"}
+{"query": "明天兰州天气怎么样", "expected_intent": "INT-06", "expected_slots": {"destination": "兰州"}, "source": "synthetic-template-v1", "type": "weather"}
+{"query": "在吗", "expected_intent": "INT-07", "expected_slots": {}, "source": "synthetic-template-v1", "type": "chitchat"}
