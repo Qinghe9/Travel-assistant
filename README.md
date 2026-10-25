@@ -1,149 +1,380 @@
-# 旅游规划助手 · RAG 模块
+# Travel Assistant · 旅游规划助手
+
+> 面向旅行问答的可追溯 Agent：LangGraph 状态编排、API-first 工具调用、RAG 补充检索与逐句证据绑定。
 
 [![CI](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ci.yml)
-[![代码自动审查](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ai-review.yml/badge.svg)](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ai-review.yml)
+[![AI Review](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ai-review.yml/badge.svg)](https://github.com/Qinghe9/Travel-assistant/actions/workflows/ai-review.yml)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/Agent-LangGraph-1C3C3C)
 
-面向《人工智能创新开发实践》课程设计的旅游规划助手 RAG 部分：把维基导游、GeoNames、ChinaTravel 等公开数据建成**可追溯**的知识库，提供「采集 → 清洗 → 切分 → 混合检索 → 证据绑定 → 生成 → 引用校验」的端到端链路，并对 Recall@3、MRR、无关知识引入、证据绑定率、检索时延做自动评测。
+Travel Assistant 是一个面向真实旅游场景的全栈 RAG Agent 示例。它将用户问题拆解为意图与槽位，优先调用天气、地图、路线和生活服务 API，再使用本地旅行知识库补充背景，最终生成带来源编号、可审计、可降级的中文回答。
 
-> 本仓库**只收录代码与评测集**（`app/`、`scripts/`、`evals/`），外加 CI 配置与说明文件。数据集、索引、PRD/流程文档与插图只保留在本机，不入库（见下方「数据与文档不入库」）。
+项目覆盖从数据采集、清洗、切片、索引、混合检索，到多轮对话、长期记忆、SSE 流式输出和自动评测的完整链路。
 
-## 目录结构
+<details>
+<summary>目录</summary>
 
+- [为什么值得一看](#为什么值得一看)
+- [系统架构](#系统架构)
+- [功能特性](#功能特性)
+- [当前评测](#当前评测)
+- [快速开始](#快速开始)
+- [Docker](#docker)
+- [API](#api)
+- [项目结构](#项目结构)
+- [测试与评测](#测试与评测)
+- [数据与安全边界](#数据与安全边界)
+- [持续集成](#持续集成)
+- [贡献](#贡献)
+
+</details>
+
+## 为什么值得一看
+
+- **API-first，RAG-supplemented**：实时数据优先来自工具，RAG 只补充景点、美食、文化等知识背景。
+- **全国行政地名解析**：省级、地级市、县级与县级市按 `scope → 高德 geocode → GeoNames` 三级顺序解析。
+- **复合意图处理**：一句话可同时触发行程、天气、交通、美食和住宿任务。
+- **证据可追溯**：事实句绑定 `source_id`，无依据句子会被删除或触发抽取式降级。
+- **多轮与跨会话记忆**：短期上下文按 `thread_id` 保存，偏好和目的地按 `user_id` 持久化。
+- **完整工程化**：FastAPI、SSE、离线冒烟、pytest、RAG 评测、TTFT 评测和 Docker 配置齐备。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    U[Web / API Client] --> F[FastAPI + SSE]
+    F --> G[LangGraph Agent]
+
+    G --> N[输入归一化]
+    N --> I[意图识别与槽位抽取]
+    I -->|缺槽位| Q[追问]
+    I -->|闲聊| C[闲聊回复]
+    I -->|旅行任务| T[工具调用]
+
+    T --> W[天气 / 空气 / 节假日]
+    T --> M[高德 POI / 酒店 / 餐饮 / 路线]
+    T --> R[地名解析]
+
+    T --> K[RAG 补充检索]
+    K --> V[向量 + BM25 + 关键词 + RRF]
+    K --> E[统一证据池]
+    T --> E
+
+    E --> P[证据校验与答案生成]
+    P --> S[SQLite 记忆 / 审计轨迹]
+    S --> F
 ```
-app/rag/
-  config.py            配置加载（.env + 默认值）
-  indexing/            采集与建库：sources/、clean、split、geo、align、embed、build
-  retrieval/           混合检索：recall（向量 + BM25）、fuse（RRF）、evidence（证据口径）
-  generation/          llm 客户端、answer（提示词 + 引用后置校验）
-scripts/               数据下载、清洗、切分、建索引、问答、自检等可执行入口
-evals/                 检索评测脚本 + 评测集（Recall@3 / MRR / nDCG / 时延门禁）
-.github/               CI 与代码自动审查工作流
-```
+
+核心原则：
+
+1. 实时事实只来自工具 API。
+2. RAG 不得覆盖天气、票价、余票等实时字段。
+3. 缺少证据时拒答或使用原文抽取，不生成估计值。
+4. 每个可核查事实句都应绑定来源。
+
+## 功能特性
+
+### Agent 与对话
+
+- 七类意图：目的地、行程、交通、住宿、美食、天气、闲聊。
+- JevK5、LLM 与规则引擎三级路由。
+- 支持复合意图、多轮槽位继承、省略终点和指代消解。
+- 支持“为什么推荐”“重新回答”“相同问题复用”等快捷分支。
+- SSE 流式事件：`meta → step → token → final`。
+
+### RAG 检索
+
+- 数据采集、许可登记、清洗、切片和地理对齐。
+- 向量、BM25、标题/关键词三路召回。
+- RRF 融合与可选重排。
+- 进程内热索引，避免每次查询往返向量数据库。
+- 证据压缩、逐句引用校验、数字校验与实词覆盖校验。
+
+### 旅游工具
+
+| 能力 | 数据源 | 说明 |
+|---|---|---|
+| 天气 | Open-Meteo / 高德 | 支持连续多日预报 |
+| 空气质量、节假日 | ShowAPI | 县级无监测点时标注上级行政区 |
+| 景点、酒店、餐饮 | 高德 Web 服务 | 县级检索中心透传、近重复 POI 合并 |
+| 驾车、步行、公交 | 高德 Web 服务 | 铁路余票仍以 12306 为准 |
+| 航班、铁路 | Travelport | 未配置凭据时明确不可用 |
+| 全国地名 | scope / 高德 / GeoNames | 覆盖地级市与县级地名 |
+
+### 工程能力
+
+- FastAPI 非流式与 SSE 流式接口。
+- 短期 SQLite Checkpointer 与长期 LangGraph Store。
+- 完整会话记录、偏好管理、Trace 查询和反馈接口。
+- HTML、CSS、JavaScript 与 Python 路由分离。
+- 无密钥离线冒烟、pytest 回归和评测门禁。
+
+## 当前评测
+
+以下结果来自当前本地快照，评测日期为 **2026-10-26**。
+
+| 指标 | 当前结果 | 说明 |
+|---|---:|---|
+| RAG Recall@3 | **98.20%** | 388 条查询，产品过滤路径 |
+| RAG MRR | **95.92%** | 产品过滤路径 |
+| RAG nDCG@3 | **95.13%** | 产品过滤路径 |
+| Hard-negative 无关知识 | **0** | 按评测集显式负例统计 |
+| 证据 `source_id` 绑定率 | **100%** | 返回候选均带可引用 ID |
+| 检索 P95 | **10 ms** | 热索引、过滤路径 |
+| 首 Token P50 | **846 ms** | 20 次真实 SSE |
+| 首 Token P95 | **1011 ms** | 20 次真实 SSE |
+| 完整响应 P95 | **2343 ms** | 观测值，不作为 TTFT 门禁 |
+
+> Recall@3 的正式门禁使用 Agent 实际传入城市/类别过滤的 `filter` 模式。无过滤 `open` 模式仅用于诊断，不应当与产品路径指标混用。
+
+评测报告：
+
+- [RAG 基线（历史提交）](evals/baseline.json)
+- [TTFT 结果](evals/agent_ttft.json)
+- [意图回归评测](evals/intent_metrics.json)
+
+> 已提交 RAG 基线记录 Recall@3 为 98.45%；当前代码重跑为 98.20%，两次结果均通过 95% 门禁。
 
 ## 快速开始
 
-```bash
-# 1) 依赖
-python -m pip install -r requirements.txt
+### 环境要求
 
-# 2) 配置（复制模板后填密钥；.env 不会被提交）
+- Python 3.12
+- Windows、Linux 或 macOS
+- 可选：Docker 与 Docker Compose
+
+### 1. 安装依赖
+
+```bash
+git clone https://github.com/Qinghe9/Travel-assistant.git
+cd Travel-assistant
+
+python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# Linux / macOS
+# source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### 2. 配置环境变量
+
+```bash
+# Linux / macOS
 cp .env.example .env
 
-# 3) 拉取数据集（默认跳过可选项；--check 只打印计划）
-python scripts/fetch_datasets.py --check
-python scripts/fetch_datasets.py
-
-# 4) 数据集就绪度自检
-python scripts/check_dataset_ready.py
-
-# 5) 建索引（先小样本试跑，再全量重建）
-python scripts/build_scope.py --all
-python scripts/build_scope.py --level county
-python scripts/build_index.py --limit 200
-python scripts/build_index.py --rebuild
-
-# 6) 端到端问答
-python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evidence
+# Windows PowerShell
+Copy-Item .env.example .env
 ```
 
-检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）都在仓库里，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
+至少需要配置对话模型与 Embedding 服务：
 
-## 全国行政地名解析
+```dotenv
+DEEPSEEK_API_KEY=your_deepseek_key
+RAG_EMBED_API_KEY=your_embedding_key
+```
 
-天气、景点、酒店和餐饮共用地名解析链：
+可选工具：
 
-1. `data/scope_cities.json` / `data/scope_counties.json` 的本地 scope；
-2. 高德 `geocode/geo`（配置 `AMAP_API_KEY` 时），结果写入
-   `data/agent/geocode_cache.sqlite`；
-3. GeoNames `CN.zip` / `geo_index.json`（省、地级市、县级 ADM1–ADM3）。
+```dotenv
+AMAP_API_KEY=your_amap_web_service_key
+SHOWAPI_APP_KEY=your_showapi_key
+JEV_APP_KEY=your_jev_key
+```
 
-三级全部失败时返回“无法解析地名”，不会猜测坐标。高德调用继续经过模块级
-`AMAP_MIN_INTERVAL=0.36s` 限速器，GeoNames 索引只在首次使用时构建并落盘缓存。
-`--level county` 只更新县级表，不会覆盖 `--all` 生成的完整地级市表；
-需要同时生成时使用 `--level both`。
+> `.env` 已被 `.gitignore` 排除。不要提交真实密钥。
 
-## 导出给其他 AI 审查
+### 3. 准备知识库
 
-项目源码、配置、测试、脚本和 CI 可拆成两个便于上传给 AI 的 Markdown 文件：
+仓库不包含原始数据、向量索引和 SQLite 数据库。
 
 ```bash
-python scripts/export_code_snapshot_split.py
+python scripts/fetch_datasets.py --list
+python scripts/fetch_datasets.py --only zhwikivoyage,geonames-cn
+python scripts/check_dataset_ready.py
+
+# 生成全国地级市与县级 scope
+python scripts/build_scope.py --all --level both
+
+# 先构建小样本，确认配置无误
+python scripts/build_index.py --limit 200
+
+# 构建完整索引
+python scripts/build_index.py --rebuild
 ```
 
-输出位置：
+完整数据构建方法见 [scripts/](scripts/)；第三方许可与署名见 [NOTICE](NOTICE)。
+
+### 4. 启动服务
+
+```bash
+python scripts/run_api.py
+```
+
+开发模式：
+
+```bash
+python scripts/run_api.py --reload
+```
+
+访问：
+
+| 页面 | 地址 |
+|---|---|
+| 对话页面 | http://127.0.0.1:8001/demo |
+| Swagger | http://127.0.0.1:8001/docs |
+| 健康检查 | http://127.0.0.1:8001/health |
+
+### 5. 命令行体验
+
+```bash
+python scripts/run_agent.py "帮我规划3天西安行程，天气怎么样"
+python scripts/run_agent.py "婺源有什么好玩的" --json
+python scripts/run_agent.py "凯里明天天气" --show-trace
+```
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+服务默认监听 `8001`。容器使用非 root 用户、只读根文件系统、持久化 `./data`，并配置健康检查。
+
+如需独立 Chroma 服务：
+
+```bash
+RAG_CHROMA_MODE=http docker compose --profile chroma up --build
+```
+
+## API
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/api/v1/chat` | 对话，支持普通 JSON 与 SSE |
+| `GET` | `/api/v1/traces/{trace_id}` | 查询请求审计轨迹 |
+| `GET` | `/api/v1/profile/{user_id}` | 查询长期偏好 |
+| `GET` | `/api/v1/profile/{user_id}/memory` | 导出跨会话对话记录 |
+| `POST` | `/api/v1/memory/import` | 导入本地旧会话 |
+| `POST` | `/api/v1/feedback` | 点赞/点踩 |
+| `GET` | `/api/v1/feedback/export` | 导出反馈 CSV |
+| `GET` | `/health` | 服务与依赖健康状态 |
+
+请求示例：
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "敦煌3天行程，天气怎么样",
+    "user_id": "demo-user",
+    "thread_id": "demo-thread",
+    "stream": false,
+    "smart_search": true
+  }'
+```
+
+## 项目结构
 
 ```text
-docs/PROJECT_CODE_PART1_AGENT_API.md
-docs/PROJECT_CODE_PART2_RAG_SCRIPTS.md
+app/
+├── agent/                 LangGraph、意图、槽位、记忆、流式与工具编排
+├── api/
+│   ├── main.py            FastAPI 入口与依赖预热
+│   ├── routes.py          对话、记忆、反馈与轨迹 API
+│   ├── demo.py            页面路由
+│   ├── templates/         HTML 页面
+│   └── static/            CSS、JavaScript 与静态图片
+├── models/                Pydantic 数据模型
+├── rag/
+│   ├── indexing/          采集、清洗、切片、地理索引与构建
+│   ├── retrieval/         向量、BM25、关键词、RRF、重排与热索引
+│   └── generation/        提示词、LLM、引用校验与抽取兜底
+└── tools/                 天气、高德、ShowAPI、路线与工具注册表
+
+evals/                     RAG、意图、延迟评测
+scripts/                   数据、索引、启动、冒烟与运维脚本
+tests/                     pytest 回归测试
+docs/                      AI 开发档案与会议记录
 ```
 
-Part 1 包含 Agent、API、模型和工具；Part 2 包含 RAG、脚本、测试、评测和 CI。
-导出会排除 `.env`、数据库、向量索引、图片、缓存和评测原始数据，并为每个文件记录路径、行数和 SHA-256。
-如需单文件版本，仍可运行 `python scripts/export_code_snapshot.py`。
+## 测试与评测
 
-## 检索架构：三路召回 + 重排 + 多轮
+全量测试：
 
-| 环节 | 做法 | 实测 |
-|---|---|---|
-| 第 1 路 向量 | 内存暴力余弦（12k 已归一化向量） | ~5 ms |
-| 第 2 路 BM25 | 倒排候选 + numpy 向量化打分（与 rank_bm25 逐位一致） | ~4 ms |
-| 第 3 路 关键词/标题 | 标题倒排加权 + 关键词覆盖率，专治专名/景点名 | ~10 ms |
-| 融合 | RRF（按名次，避免分数量纲不可比），三路等权 | <1 ms |
-| 重排 | **默认关闭**（原因见下）；开启时用硅基流动 `BAAI/bge-reranker-v2-m3`，失败自动退回融合序 | ~0.3 s |
-| 生成 | DeepSeek `deepseek-chat`，SSE 真流式并记录 TTFT | 完整时延单独观测 |
-| 多轮 | 查询改写（0.6 s 预算，超时回落规则式）+ 槽位继承（城市/类别跨轮不丢） | ≤0.6 s/追问 |
+```bash
+python -m pytest -q
+```
 
-- **重排为什么默认关闭**：实测在**带过滤的产品路径**上它零增益——不重排的基线 Top3 命中率已是 1.000，
-  MRR 反而更高（0.9602 vs 0.9516），却要多花 ~300 ms 并多一个网络故障点（免费档抖动时它会超时降级）。
-  只有**无过滤（open）**场景值得开：Recall@3 0.871→0.923，此时建议 `RAG_RERANK_CANDIDATES=20`；
-  需要时设 `RAG_RERANK_ENABLED=1`。
-- **类别过滤不可靠**：chunk 的 `category` 里 tips 占 53.9%（成都 66 个 chunk 里 food=0），硬过滤会把池子清空，
-  因此在 [fuse.py](app/rag/retrieval/fuse.py) 里做了「滤空就退回只按城市」的自动降级。
-- **端到端时延**：`python evals/run_e2e_latency.py` 以首个内容 token 的 P95 ≤2 秒为门禁；
-  完整响应时间只观测，不再为了 2 秒强行截断。生成失败时使用 query-aware 相关句兜底，
-  兜底率单独设门禁（默认 ≤5%），不会再混入正常生成冒充达标。
+离线冒烟：
 
-## 检索性能（进程内热索引）
+```bash
+python scripts/smoke_agent_offline.py
+python scripts/smoke_api_offline.py
+python scripts/smoke_fetch_offline.py
+```
 
-[app/rag/retrieval/hot_index.py](app/rag/retrieval/hot_index.py) 把向量矩阵、正文元数据、词法倒排一次性装进内存，检索阶段从「Chroma 往返 + 全库 BM25 打分」变成「内存矩阵乘法 + 倒排候选」：
+RAG 评测：
 
-| 阶段 | 热索引前 | 热索引后 |
-|---|---|---|
-| 向量召回 | 126 ms | ~11 ms |
-| BM25 召回 | 129 ms | ~5 ms |
-| 元数据回表 | 117 ms | ~0.2 ms |
-| **单次检索** | **476 ms（P95 686）** | **19 ms（P95 21）** |
+```bash
+python evals/run_rag_eval.py --mode both
+```
 
-- 由 `recall.warmup()` 构建（长驻服务启动时调用一次），构建失败自动回退 Chroma 路径；
-- 向量首次从 Chroma 拉全量后缓存到 `data/index/hot_vectors.npz`，随 `index_version` 失效重取；
-- 评测门禁已补上「检索时延 P95 ≤ 300ms」——此前只是文档里的指标，没有门禁守着。
+意图评测：
 
-## 数据与文档不入库
+```bash
+python evals/run_intent_eval.py
+```
 
-[.gitignore](.gitignore) 排除了 `data/`（原始快照、清洗产物、向量库与 manifest，约 1 GB）、`docs/`、`prd_assets/`、`rag_assets/`、`prd_render*/`、`*.docx` 等，本机按上面的命令重建。
+真实 SSE TTFT：
 
-> 采集脚本已内置 HTTP 308 跳转处理：`hf-mirror.com` 会把 `/datasets/.../resolve/...` 用 308 跳到 `huggingface.co`，而 Python 3.10 及更早的标准库既不派发 `http_error_308`，`redirect_request()` 也不在白名单里，必须显式补上（见 `scripts/fetch_datasets.py` 的 `_RedirectHandler`）。脚本同时校验 `Content-Length`，避免把**截断**的快照当成成功登记。
+```bash
+python evals/run_agent_ttft.py \
+  --base-url http://127.0.0.1:8001 \
+  --runs 20 \
+  --gate 2.0
+```
 
-## 持续集成与代码自动审查
+## 数据与安全边界
 
-| 工作流 | 触发 | 内容 |
-|---|---|---|
-| [.github/workflows/ci.yml](.github/workflows/ci.yml) | push / PR | ruff 高信号规则（E9/F63/F7/F82）+ 全量语法编译 + **离线冒烟**（不联网、不需要密钥） |
-| [.github/workflows/ai-review.yml](.github/workflows/ai-review.yml) | PR | ① ruff 把问题直接标注到 PR 改动行；② 调用 DeepSeek 生成评审意见并回帖 PR |
+- `data/`、索引、数据库和 `.env` 不属于代码快照，需要按部署环境自行生成。
+- 当前已构建知识库由公开旅行语料构成，不等同于企业内部私有知识库。
+- 工具实时数据有供应商覆盖范围；县级空气质量和部分服务可能回退到上级行政区。
+- 航班、铁路正式票价与余票依赖授权供应商，系统不会在没有 API 时猜造结果。
+- 引用校验和接地校验能降低幻觉风险，但不能数学保证所有自然语言蕴含关系。
+- 2 秒指标按首 Token `TTFT P95` 定义；完整响应 P95 单独观测。
 
-启用 AI 审查只需在 **Settings → Secrets and variables → Actions** 添加：
+## 数据许可
 
-- Secret `DEEPSEEK_API_KEY`：AI 审查用的密钥（**不配置也能跑**，脚本会检测到缺失并跳过，不会让 CI 变红）
-- 可选 Variables：`REVIEW_API_BASE`（默认 `https://api.deepseek.com/v1`）、`REVIEW_MODEL`（默认 `deepseek-chat`）
+本项目不重新许可第三方数据。维基导游、维基百科、GeoNames、ChinaTravel、ModelScope 等数据的使用、署名与分发条件以 [NOTICE](NOTICE) 为准。项目代码如需对外再分发，应由仓库所有者补充明确的代码许可证。
 
-> fork 发起的 PR 拿不到仓库 Secret，AI 审查会自动跳过。
+## 持续集成
 
-## 贡献与分支约定
+GitHub Actions 当前执行：
 
-- `main` 只接受通过 PR 合入。
-- 每个 PR 自动跑两道门：**CI**（ruff 高信号规则 + 全量语法编译 + 离线冒烟）与**代码自动审查**（ruff 把问题标注到改动行；配置 `DEEPSEEK_API_KEY` 后模型还会给出评审意见并回帖）。
-- 提交信息建议写成 `<type>(<scope>): <subject>`，type 取 feat / fix / docs / chore / refactor。
+- ruff 高信号静态检查
+- 全工程 Python 语法编译
+- 数据源适配器离线冒烟
+- Agent 图结构、记忆、引用绑定与降级冒烟
+- FastAPI、SSE 和反馈接口冒烟
 
-## 许可
+PR 可选启用 AI Review。Fork PR 无法读取仓库 Secret 时会自动跳过。
 
-数据来源与许可见 [NOTICE](NOTICE)；其中 CC BY-SA / CC BY-NC 等条款在公开或商用场景下需按 NOTICE 声明。
+## 贡献
+
+1. 从 `main` 创建功能分支。
+2. 保持提交聚焦，推荐使用 `feat:`、`fix:`、`refactor:`、`test:`、`docs:`。
+3. 新功能必须附测试，涉及检索或生成时同步更新评测。
+4. 不要提交 `.env`、密钥、原始数据、向量索引或本地数据库。
+5. 提交 PR 前运行全量测试与离线冒烟。
+
+## 致谢
+
+感谢维基导游、维基百科、GeoNames、ChinaTravel、ModelScope 数据提供方，以及 FastAPI、LangGraph、Chroma、jieba 等开源项目。
+
+第三方数据来源、许可证和署名要求详见 [NOTICE](NOTICE)。
