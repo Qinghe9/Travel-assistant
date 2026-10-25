@@ -14,6 +14,7 @@ PROCESSED = DATA / "processed"
 INDEX = DATA / "index"
 
 SCOPE_FILE = DATA / "scope_cities.json"
+SCOPE_COUNTIES_FILE = DATA / "scope_counties.json"
 CHINA_TITLES_FILE = DATA / "china_scope_titles.json"
 WIKIVOYAGE_SNAPSHOT = "20261011"
 WIKIVOYAGE_DUMP = RAW / "zhwikivoyage" / WIKIVOYAGE_SNAPSHOT / "zhwikivoyage-latest-pages-articles.xml.bz2"

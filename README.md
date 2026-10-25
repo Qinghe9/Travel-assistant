@@ -38,6 +38,7 @@ python scripts/check_dataset_ready.py
 
 # 5) 建索引（先小样本试跑，再全量重建）
 python scripts/build_scope.py --all
+python scripts/build_scope.py --level county
 python scripts/build_index.py --limit 200
 python scripts/build_index.py --rebuild
 
@@ -46,6 +47,20 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
 ```
 
 检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）都在仓库里，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
+
+## 全国行政地名解析
+
+天气、景点、酒店和餐饮共用地名解析链：
+
+1. `data/scope_cities.json` / `data/scope_counties.json` 的本地 scope；
+2. 高德 `geocode/geo`（配置 `AMAP_API_KEY` 时），结果写入
+   `data/agent/geocode_cache.sqlite`；
+3. GeoNames `CN.zip` / `geo_index.json`（省、地级市、县级 ADM1–ADM3）。
+
+三级全部失败时返回“无法解析地名”，不会猜测坐标。高德调用继续经过模块级
+`AMAP_MIN_INTERVAL=0.36s` 限速器，GeoNames 索引只在首次使用时构建并落盘缓存。
+`--level county` 只更新县级表，不会覆盖 `--all` 生成的完整地级市表；
+需要同时生成时使用 `--level both`。
 
 ## 导出给其他 AI 审查
 

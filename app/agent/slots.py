@@ -52,9 +52,17 @@ def cities() -> list:
     names = set(BASE_CITIES)
     try:
         from app.rag import config as rag_cfg
-        if rag_cfg.SCOPE_FILE.exists():
-            data = json.loads(rag_cfg.SCOPE_FILE.read_text(encoding="utf-8"))
-            names.update(c["name_zh"] for c in data.get("cities", []) if c.get("name_zh"))
+        paths = [rag_cfg.SCOPE_FILE]
+        county_file = getattr(rag_cfg, "SCOPE_COUNTIES_FILE", None)
+        if county_file:
+            paths.append(county_file)
+        for path in paths:
+            if not path.exists():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for key in ("cities", "counties"):
+                names.update(c["name_zh"] for c in data.get(key, [])
+                             if c.get("name_zh"))
     except Exception:
         pass
     _CITY_CACHE = sorted(names, key=len, reverse=True)
