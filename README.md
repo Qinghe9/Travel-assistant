@@ -46,6 +46,22 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
 
 检索评测脚本与评测集（`evals/run_rag_eval.py`、`evals/rag_eval.jsonl`）都在仓库里，直接 `python evals/run_rag_eval.py --mode both` 即可运行。
 
+## 导出给其他 AI 审查
+
+项目源码、配置、测试、脚本和 CI 可合并导出为一个 Markdown 文件：
+
+```bash
+python scripts/export_code_snapshot.py
+```
+
+输出位置：
+
+```text
+docs/PROJECT_CODE_SNAPSHOT.md
+```
+
+导出会排除 `.env`、数据库、向量索引、图片、缓存和评测原始数据，并为每个文件记录路径、行数和 SHA-256。
+
 ## 检索架构：三路召回 + 重排 + 多轮
 
 | 环节 | 做法 | 实测 |
