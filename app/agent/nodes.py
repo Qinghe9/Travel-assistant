@@ -1467,6 +1467,7 @@ def _answer_completion_issues(state: dict, text: str) -> list:
         labels = ["第一天", "第二天", "第三天", "第四天", "第五天"]
         need = labels[:min(max(days, 1), len(labels))]
         if days:
+            costs = []
             for index, label in enumerate(need):
                 if label not in content:
                     issues.append("缺少完整逐日结构")
@@ -1484,6 +1485,14 @@ def _answer_completion_issues(state: dict, text: str) -> list:
                 ranges.sort()
                 if any(ranges[i][0] < ranges[i - 1][1] for i in range(1, len(ranges))):
                     issues.append("%s存在时间重叠" % label)
+                cost = re.search(
+                    r"费用小计[^\d]{0,12}(\d+(?:\.\d+)?)", segment)
+                if cost:
+                    costs.append(float(cost.group(1)))
+            budget = (state.get("slots") or {}).get("budget")
+            if budget and costs and sum(costs) > float(budget):
+                issues.append("逐日费用合计%.0f元超过总预算%.0f元" %
+                              (sum(costs), float(budget)))
     tasks = state.get("tasks") or []
     if len(tasks) > 1:
         for task in tasks:
