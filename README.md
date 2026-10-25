@@ -48,19 +48,22 @@ python scripts/ask.py "成都有哪些必去的景点" --city 成都 --show-evid
 
 ## 导出给其他 AI 审查
 
-项目源码、配置、测试、脚本和 CI 可合并导出为一个 Markdown 文件：
+项目源码、配置、测试、脚本和 CI 可拆成两个便于上传给 AI 的 Markdown 文件：
 
 ```bash
-python scripts/export_code_snapshot.py
+python scripts/export_code_snapshot_split.py
 ```
 
 输出位置：
 
 ```text
-docs/PROJECT_CODE_SNAPSHOT.md
+docs/PROJECT_CODE_PART1_AGENT_API.md
+docs/PROJECT_CODE_PART2_RAG_SCRIPTS.md
 ```
 
+Part 1 包含 Agent、API、模型和工具；Part 2 包含 RAG、脚本、测试、评测和 CI。
 导出会排除 `.env`、数据库、向量索引、图片、缓存和评测原始数据，并为每个文件记录路径、行数和 SHA-256。
+如需单文件版本，仍可运行 `python scripts/export_code_snapshot.py`。
 
 ## 检索架构：三路召回 + 重排 + 多轮
 
