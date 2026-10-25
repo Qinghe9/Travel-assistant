@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import csv
+import io
+import sqlite3
 import uuid
 from datetime import datetime
 
@@ -15,13 +18,26 @@ from app.agent import config as cfg
 from app.agent import slots as agent_slots
 from app.agent.graph import get_agent, get_async_agent
 from app.agent.store import append_turn, clear_profile, load_history, load_profile, save_profile
+from app.agent.sqlite_utils import tune_sqlite
 from app.agent.streaming import astream_answer
 from app.api.sse import SSE_HEADERS, sse_frame
-from app.models.schemas import ChatRequest, FeedbackRequest
+from app.models.schemas import ChatRequest, FeedbackRequest, now_iso
 
 router = APIRouter()
 
 FEEDBACK_LOG = cfg.DATA / "agent" / "feedback.jsonl"
+FEEDBACK_DB = cfg.DATA / "agent" / "feedback.db"
+
+
+def _feedback_connection():
+    FEEDBACK_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(FEEDBACK_DB), check_same_thread=False)
+    tune_sqlite(conn)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS feedback ("
+        "trace_id TEXT, score INTEGER, reason TEXT, created_at TEXT)")
+    conn.commit()
+    return conn
 
 
 def _inputs(req: ChatRequest, thread_id: str, trace_id: str, user_id: str) -> dict:
@@ -189,7 +205,48 @@ def get_trace(trace_id: str):
 def feedback(req: FeedbackRequest):
     """用户点赞/点踩（PRD POST /api/v1/feedback）。"""
     FEEDBACK_LOG.parent.mkdir(parents=True, exist_ok=True)
-    record = {"trace_id": req.trace_id, "score": req.score, "reason": req.reason}
+    record = {"trace_id": req.trace_id, "score": req.score, "reason": req.reason,
+              "created_at": now_iso()}
     with FEEDBACK_LOG.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    conn = _feedback_connection()
+    try:
+        conn.execute(
+            "INSERT INTO feedback(trace_id, score, reason, created_at) VALUES (?,?,?,?)",
+            (record["trace_id"], record["score"], record["reason"], record["created_at"]))
+        conn.commit()
+    finally:
+        conn.close()
     return {"status": "ok", "trace_id": req.trace_id}
+
+
+@router.get("/feedback/export")
+def export_feedback(start: str = None, end: str = None):
+    """按日期导出反馈 CSV；日期格式 YYYY-MM-DD，范围包含首尾。"""
+    for value in (start, end):
+        if value:
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="日期必须是 YYYY-MM-DD")
+    conn = _feedback_connection()
+    try:
+        sql = "SELECT trace_id, score, reason, created_at FROM feedback WHERE 1=1"
+        params = []
+        if start:
+            sql += " AND substr(created_at,1,10) >= ?"
+            params.append(start)
+        if end:
+            sql += " AND substr(created_at,1,10) <= ?"
+            params.append(end)
+        sql += " ORDER BY created_at"
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(("trace_id", "score", "reason", "created_at"))
+    writer.writerows(rows)
+    return StreamingResponse(
+        iter([buffer.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=feedback.csv"})
