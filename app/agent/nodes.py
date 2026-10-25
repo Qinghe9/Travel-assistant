@@ -1546,6 +1546,11 @@ def compose(state):
                     "美食任务必须先用本轮高德餐饮工具返回的餐厅名称和地址回答附近吃什么，"
                     "再用 RAG 补充菜品、小吃或饮食文化；不得跳过工具餐厅名单。"
                 )
+            if Intent.ITINERARY in intents:
+                hint = (hint + "\n" if hint else "") + (
+                    "行程必须使用固定骨架：## 第一天（主题），下分“上午/下午/晚间”，"
+                    "每项写景点、建议时长和交通衔接；最后写费用小计。第二、三、四天同样结构。"
+                    "证据不足的时段写“待确认”，不得把合理建议伪装成已核实事实。")
             if state.get("thinking"):
                 hint = (hint + "\n" if hint else "") + (
                     "用户开启了深度思考：请给出更详细的分日安排、取舍理由与注意事项；"
@@ -1640,7 +1645,8 @@ def compose(state):
     if limitations and "限制与待确认" not in numbered:
         numbered += "\n\n限制与待确认：\n" + "\n".join("- " + line for line in limitations)
     if completion_issues:
-        numbered += ("\n\n完整性提示：本稿仍存在 %s，建议缩短问题范围或补充条件后重试。"
+        numbered += ("\n\n说明（系统状态）：受当前证据限制，本轮输出为分日建议而非完整逐日行程。"
+                     "缺口：%s。可补充落脚区域、必去景点或交通偏好后继续细化。"
                      % "、".join(completion_issues))
     numbered = (_destination_source_notice(state)
                 + _profile_preference_notice(state) + numbered)
