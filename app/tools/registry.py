@@ -152,7 +152,7 @@ def run_for_intents(intents: list, slots: dict) -> list:
                 names.append(tool_name)
     if not names:
         return []
-    workers = min(4, len(names))
+    workers = min(8, len(names))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="travel-tool") as pool:
         return list(pool.map(lambda name: _run_one(name, slots), names))
 
