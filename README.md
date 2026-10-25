@@ -37,6 +37,7 @@ python scripts/fetch_datasets.py
 python scripts/check_dataset_ready.py
 
 # 5) 建索引（先小样本试跑，再全量重建）
+python scripts/build_scope.py --all
 python scripts/build_index.py --limit 200
 python scripts/build_index.py --rebuild
 
