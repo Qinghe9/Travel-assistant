@@ -15,7 +15,10 @@ venv/
 # ===== 只收录代码与评测集 =====
 # 数据集、索引、文档、PRD 与插图一律留在本机，不入库
 data/
-docs/
+docs/*
+!docs/README.md
+!docs/ai-dev-log/
+!docs/meetings/
 prd_assets/
 rag_assets/
 prd_render*/
@@ -32,6 +35,13 @@ evals/*
 !evals/boundary_eval.jsonl
 !evals/baseline.json
 !evals/run_e2e_latency.py
+!evals/run_agent_ttft.py
+!evals/agent_ttft.json
+!evals/run_intent_eval.py
+!evals/intent_eval.jsonl
+!evals/run_safety_eval.py
+!evals/safety_eval.jsonl
+!evals/intent_metrics.json
 
 # ===== 工具与临时产物 =====
 .dsh/
