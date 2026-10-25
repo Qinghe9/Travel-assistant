@@ -19,7 +19,7 @@ import time
 import datetime as _dt
 
 from app.agent import config as cfg
-from app.agent import jev, llm, prompts, retrieval
+from app.agent import geocode, jev, llm, prompts, retrieval
 from app.agent import slots as slot_lib
 from app.agent.intents import INTENT_NEEDS_RETRIEVAL, SLOT_LABEL, missing_slots, route_target
 from app.agent.state import trace_event
@@ -357,6 +357,38 @@ _DESTINATION_REFERENCE_WORDS = (
 
 def _has_destination_reference(text: str) -> bool:
     return any(word in (text or "") for word in _DESTINATION_REFERENCE_WORDS)
+
+
+_PLACE_BEFORE_INTENT = re.compile(
+    r"(?:^|[，,\s])([\u4e00-\u9fff]{2,8}?)(?:明天|今天|后天|最近|未来|有什么|"
+    r"哪里好玩|怎么玩|值得去|景点|美食|小吃|天气|气温|酒店|住宿|行程|旅游|旅行|好玩)"
+)
+_PLACE_AFTER_GO = re.compile(
+    r"(?:去|到|在)\s*([\u4e00-\u9fff]{2,10}?)(?=玩|旅游|旅行|吃|住|看|逛|的|，|,|。|？|$)"
+)
+_PLACE_WITH_DAYS = re.compile(
+    r"(?:^|[，,\s])([\u4e00-\u9fff]{2,8}?)(?:[0-9一二两三四五六七八九十]{1,2}\s*天)"
+)
+_PLACE_AFTER_PLAN = re.compile(
+    r"(?:规划|安排)\s*[0-9一二两三四五六七八九十]{1,2}\s*天\s*"
+    r"([\u4e00-\u9fff]{2,8}?)(?:行程|旅游|旅行|游玩|，|,|。|$)"
+)
+_PLACE_BAD_WORDS = ("帮我", "请问", "规划", "安排", "推荐", "介绍", "查询", "明天",
+                    "今天", "最近", "未来", "有什", "哪里", "怎么", "什么")
+
+
+def _place_candidate_from_query(text: str):
+    """从无城市表中的口语问法提取候选地名，再由统一 geocode 验证。"""
+    q = text or ""
+    for pattern in (_PLACE_AFTER_PLAN, _PLACE_WITH_DAYS, _PLACE_BEFORE_INTENT,
+                    _PLACE_AFTER_GO):
+        match = pattern.search(q)
+        if not match:
+            continue
+        candidate = match.group(1).strip()
+        if candidate and not any(word in candidate for word in _PLACE_BAD_WORDS):
+            return candidate
+    return None
 
 
 def _is_memory_recall_query(text: str) -> bool:
@@ -758,6 +790,20 @@ def classify_and_extract(state):
     elif ambiguous_destination_reference:
         note = (note + "；" if note else "") + (
             "“那里”缺少当前会话指代，未使用跨会话城市猜测")
+    geocode_trace = []
+    destination_geocode_source = ""
+    if not merged.get("destination") and not province:
+        candidate = _place_candidate_from_query(text)
+        if candidate:
+            place = geocode.resolve_place(candidate, trace=geocode_trace)
+            if place and place.get("name"):
+                merged["destination"] = place["name"]
+                destination_geocode_source = place.get("source", "")
+                if place.get("province"):
+                    merged["province"] = place["province"]
+                destination_source = "current"
+                note = (note + "；" if note else "") + (
+                    "地名解析 %s：%s" % (place.get("source"), place["name"]))
     if not merged.get("start_city") and profile.get("start_city"):
         merged["start_city"] = profile["start_city"]
 
@@ -775,7 +821,13 @@ def classify_and_extract(state):
             default_capital = default_capital or any(
                 task.get("intent") in (Intent.ITINERARY.value, Intent.DESTINATION.value)
                 for task in multi_tasks)
-        capital = slot_lib.PROVINCES.get(province)
+        capital = ""
+        if default_capital:
+            place = geocode.resolve_place(province, trace=geocode_trace)
+            if place and place.get("city") and place.get("city") != province:
+                capital = place["city"]
+                destination_geocode_source = place.get("source", "")
+        capital = capital or slot_lib.PROVINCES.get(province)
         if default_capital and capital:
             merged["destination"] = capital
             destination_source = "province_default"
@@ -830,6 +882,8 @@ def classify_and_extract(state):
                               jev_confidence=(jev_result or {}).get("confidence"),
                               jev_latency_ms=(jev_result or {}).get("latency_ms"),
                               jev_note=jev_note,
+                              geocode_source=destination_geocode_source,
+                              geocode_trace=geocode_trace[-4:],
                               urgent=urgent, emotion=emotion)],
     }
 
@@ -1143,11 +1197,39 @@ def _annotate_hotel_distances(results: list, last_turn: dict) -> None:
             item.data = data
 
 
+def _resolve_tool_place(slots: dict, query: str):
+    """把目的地规范化为高德可直接使用的检索中心；失败则保留原槽位。"""
+    tool_slots = dict(slots or {})
+    destination = str(tool_slots.get("destination") or "").strip()
+    candidate = destination or _place_candidate_from_query(query)
+    if not candidate:
+        return tool_slots, {}, []
+    trace = []
+    place = geocode.resolve_place(candidate, trace=trace)
+    if not place:
+        return tool_slots, {"input": candidate, "source": "", "attempts": trace}, trace
+    # name 对县级尤其重要：不能把“婺源”退化成“上饶”或全国泛搜。
+    tool_slots["destination"] = place.get("name") or candidate
+    if place.get("province"):
+        tool_slots["province"] = place["province"]
+    detail = {
+        "input": candidate,
+        "name": tool_slots["destination"],
+        "city": place.get("city", ""),
+        "county": place.get("county", ""),
+        "adcode": place.get("adcode", ""),
+        "source": place.get("source", ""),
+        "attempts": trace,
+    }
+    return tool_slots, detail, trace
+
+
 def call_tools(state):
     """调用外部工具，并把成功的工具结果转成同构证据。"""
     t0 = time.perf_counter()
     intents = _intents_of(state)
-    slots = state.get("slots") or {}
+    slots, geocode_detail, _trace = _resolve_tool_place(
+        state.get("slots") or {}, state.get("query") or "")
     results = registry.run_for_intents(intents, slots)
     _annotate_hotel_distances(results, state.get("last_turn") or {})
     tool_evidence = registry.to_evidence(results)
@@ -1177,6 +1259,7 @@ def call_tools(state):
                               detail="｜".join(notes) if notes
                                      else ("、".join(summaries) + " — 全部成功"),
                               providers=[item.provider for item in results],
+                              geocode=geocode_detail,
                               unavailable=notes)],
     }
 
