@@ -41,10 +41,34 @@ def _extract_json(text: str) -> str:
     if text.startswith("```"):
         text = re.sub(r"^```[A-Za-z]*\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-    start, end = text.find("{"), text.rfind("}")
-    if start >= 0 and end > start:
-        return text[start:end + 1]
     return text
+
+
+def _json_candidates(raw: str) -> list[str]:
+    text = _extract_json(raw)
+    candidates = []
+    for opening, closing in (("{", "}"), ("[", "]")):
+        start, end = text.find(opening), text.rfind(closing)
+        if start >= 0 and end > start:
+            candidates.append(text[start:end + 1])
+    candidates.append(text)
+    return list(dict.fromkeys(candidates))
+
+
+def _try_parse(raw: str, schema):
+    last_error = "模型返回的不是合法 JSON"
+    for candidate in _json_candidates(raw):
+        try:
+            data = json.loads(candidate)
+        except Exception as exc:
+            last_error = "模型返回的不是合法 JSON：%s（%s）" % (
+                candidate[:120] or "（空）", str(exc)[:80])
+            continue
+        try:
+            return validate(schema, data), ""
+        except Exception as exc:
+            last_error = "字段校验失败：%s" % str(exc)[:160]
+    return None, last_error
 
 
 def chat_json(messages, schema, **kwargs):
@@ -55,12 +79,19 @@ def chat_json(messages, schema, **kwargs):
         res = _rag_llm.chat(messages, **kwargs)
     except Exception as exc:
         return None, error_of(exc)
-    raw = _extract_json(res.get("text") or "")
+    raw = res.get("text") or ""
+    parsed, err = _try_parse(raw, schema)
+    if parsed is not None:
+        return parsed, ""
+
+    repair_messages = list(messages) + [
+        {"role": "assistant", "content": raw or "（空输出）"},
+        {"role": "user", "content":
+            "上面的输出未通过校验（%s）。只输出修正后的 JSON，"
+            "不要解释、不要代码块。" % err[:160]},
+    ]
     try:
-        data = json.loads(raw)
-    except Exception:
-        return None, "模型返回的不是合法 JSON：%s" % (raw[:120] or "（空）")
-    try:
-        return validate(schema, data), ""
+        repaired = _rag_llm.chat(repair_messages, **kwargs)
     except Exception as exc:
-        return None, "字段校验失败：%s" % str(exc)[:160]
+        return None, "%s；自动修复调用失败：%s" % (err, error_of(exc))
+    return _try_parse(repaired.get("text") or "", schema)
