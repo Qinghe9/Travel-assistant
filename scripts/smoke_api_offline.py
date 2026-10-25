@@ -100,8 +100,12 @@ with TestClient(app) as client:
     check("调试台 /demo 可访问",
           r.status_code == 200 and "开启新对话" in r.text and "给助手发送消息" in r.text,
           str(r.status_code))
-    check("调试台会补录本地旧会话", "syncLocalMemory" in r.text
-          and "/api/v1/memory/import" in r.text, "")
+    demo_page = r.text
+    r = client.get("/static/demo.js")
+    check("调试台会补录本地旧会话", r.status_code == 200
+          and "/static/demo.js" in demo_page
+          and "syncLocalMemory" in r.text
+          and "/api/v1/memory/import" in r.text, str(r.status_code))
     r = client.get("/static/coast.jpg")
     check("氛围底图可访问", r.status_code == 200 and "image" in r.headers.get("content-type", ""),
           r.headers.get("content-type", ""))
