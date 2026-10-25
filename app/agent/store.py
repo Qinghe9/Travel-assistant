@@ -16,6 +16,7 @@ import threading
 import uuid
 
 from app.agent import config as cfg
+from app.agent.sqlite_utils import tune_sqlite
 from app.models.schemas import now_iso
 
 NAMESPACE = ("user",)
@@ -39,6 +40,7 @@ def get_profile_store():
         from langgraph.store.sqlite import SqliteStore
         cfg.PROFILE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(cfg.PROFILE_DB_PATH), check_same_thread=False)
+        tune_sqlite(conn)
         store = SqliteStore(conn)
         store.setup()
         conn.commit()          # setup 会留下事务，不提交会导致后续 put 报

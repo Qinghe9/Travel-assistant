@@ -9,6 +9,7 @@ sqlite 模式把状态写进 data/agent/agent.db；缺依赖时自动退回内�
 from __future__ import annotations
 
 from app.agent import config as cfg
+from app.agent.sqlite_utils import tune_sqlite
 
 
 def make_checkpointer(mode: str = None):
@@ -21,7 +22,10 @@ def make_checkpointer(mode: str = None):
             from langgraph.checkpoint.sqlite import SqliteSaver
             cfg.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(str(cfg.DB_PATH), check_same_thread=False)
-            return SqliteSaver(conn)
+            tune_sqlite(conn)
+            saver = SqliteSaver(conn)
+            saver._raw_conn = conn
+            return saver
         except Exception as exc:
             print("  [memory] SQLite 记忆不可用（%s），本次回退到内存模式；"
                   "需要持久化请安装：pip install langgraph-checkpoint-sqlite" % exc)
@@ -45,7 +49,13 @@ async def make_async_checkpointer(mode: str = None):
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             cfg.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             conn = await aiosqlite.connect(str(cfg.DB_PATH))
-            return AsyncSqliteSaver(conn)
+            for pragma in ("PRAGMA journal_mode=WAL", "PRAGMA busy_timeout=3000",
+                           "PRAGMA synchronous=NORMAL"):
+                await conn.execute(pragma)
+            await conn.commit()
+            saver = AsyncSqliteSaver(conn)
+            saver._raw_conn = conn
+            return saver
         except Exception as exc:
             print("  [memory] Async SQLite 记忆不可用（%s），本次回退到内存模式；"
                   "需要持久化请安装：pip install aiosqlite" % exc)
