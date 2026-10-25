@@ -94,7 +94,7 @@ MIN_FUSED_SCORE = float(_env("RAG_MIN_FUSED_SCORE", "0.0"))
 MIN_VECTOR_SIM = float(_env("RAG_MIN_VECTOR_SIM", "0.50"))
 BM25_K1 = float(_env("RAG_BM25_K1", "1.5"))
 BM25_B = float(_env("RAG_BM25_B", "0.75"))
-MAX_PER_PARENT = int(_env("RAG_MAX_PER_PARENT", "2"))
+MAX_PER_PARENT = int(_env("RAG_MAX_PER_PARENT", "4"))
 
 # 对话模型（DeepSeek）；embedding / rerank 仍使用硅基流动，凭据严格分离。
 LLM_TIMEOUT = int(_env("LLM_TIMEOUT", "8"))
