@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>旅游规划助手 · Agent API</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="bg"></div><div class="veil"></div>
+<main class="landing">
+  <section class="hero">
+    <span class="badge">✦ PRD v1.2 · FastAPI</span>
+    <h1>旅游规划助手 · Agent API</h1>
+    <p class="sub">LangGraph 状态图 + RAG + 工具调用（PRD v1.2）</p>
+
+    <nav class="nav">
+      <a class="nav-item" href="/demo">
+        <span class="nav-icon">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/>
+          </svg>
+        </span>
+        <span class="nav-text"><b>打开调试台</b><span>实时看 step 与 token</span></span>
+        <span class="nav-arrow">›</span>
+      </a>
+      <a class="nav-item" href="/docs">
+        <span class="nav-icon">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+          </svg>
+        </span>
+        <span class="nav-text"><b>Swagger 文档</b><span>直接调用接口</span></span>
+        <span class="nav-arrow">›</span>
+      </a>
+      <a class="nav-item" href="/health">
+        <span class="nav-icon">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12h4l2-6 4 12 2-6h6"/>
+          </svg>
+        </span>
+        <span class="nav-text"><b>健康检查</b><span>查看依赖与配置状态</span></span>
+        <span class="nav-arrow">›</span>
+      </a>
+    </nav>
+
+    <div class="api">
+      <div class="api-row"><span class="method post">POST</span><code class="code">/api/v1/chat</code><span class="tag">SSE</span></div>
+      <div class="api-row"><span class="method get">GET</span><code class="code">/api/v1/traces/{trace_id}</code></div>
+    </div>
+
+    <p class="foot">FastAPI 服务，地址 <b>127.0.0.1:8001</b>；<b>/</b> 是导航首页，<b>/demo</b> 是对话调试台，<b>/docs</b> Swagger，<b>/health</b> 健康检查。</p>
+  </section>
+</main>
+</body>
+</html>
