@@ -35,7 +35,7 @@
 | FR-06 | 向量 + BM25 + RRF，逐句引用，Top3≥95% | 🟡 | RAG 模块达标（基线 Recall@3 0.9845 / MRR 0.9601）；Agent 端有引用后置校验；**未做 Agent 级 RAG 评测**；绑定率常在 0.38~0.83（未绑定句子被剔除） |
 | FR-07 | thread_id 记忆、10 轮、重启恢复 | 🟡 | SQLite 短期记忆、跨进程恢复已验证；同步/异步连接与长期 Store 已启用 WAL/busy_timeout；仍缺 10 轮回归、工具摘要入提示和 summary/trimming |
 | FR-08 | Chainlit 展示步骤与耗时 | 🟡 | 自研 `/demo` 已展示步骤/耗时/引用；**不是 Chainlit** |
-| FR-09 | 点赞/点踩、SQLite、CSV 导出 | 🟡 | `/api/v1/feedback` 写 JSONL；**无 UI 按钮、未入 SQLite、无 CSV 导出** |
+| FR-09 | 点赞/点踩、SQLite、CSV 导出 | 🟡 | `/api/v1/feedback` 已 JSONL+SQLite 双写，支持日期过滤 CSV 导出；仍缺 UI 按钮 |
 | FR-10 | 提示注入、密钥探测、越权参数 | 🟡 | 提示词含注入防护；工具参数按签名白名单过滤；**没有安全评测集、没有限流** |
 
 ## 三、非功能指标
@@ -49,9 +49,9 @@
 | MRR ≥0.90 | ✅ | 0.9601 |
 | 依据覆盖率 100% | 🟡 | 未绑定句子会被剔除，输出是"已绑定"；但绑定率指标口径需重做（当前 0.38~0.83） |
 | 无关知识 0 条 | ✅ | RAG 评测 hard negative 为 0 |
-| 首 token P95 ≤2s | 🟡 | RAG 模块有 `run_e2e_latency.py`；**Agent API 未记录 TTFT**；工具先执行 2~5s，实际首 token 可能超 2s |
+| 首 token P95 ≤2s | 🟡 | Agent API 已记录 `ttft_ms`；TTFT 脚本支持 2 次预热、无 token 路由兜底及客户端/服务端双口径；需在最终代码上复测 P95 |
 | 完整响应/工具耗时 | 🟡 | 步骤里有单节点耗时；没有统一 P95 报告 |
-| 连续 100 请求 ≥99% | ❌ | 无压测 |
+| 连续 100 请求 ≥99% | 🟡 | 工具已支持 8 路并行和异常隔离；仍未完成正式 100 请求压测 |
 | 冷启动 ≤60s | ✅ | 热索引约 2s，服务约 3s 可用 |
 | 空闲内存 ≤1.5GB | ❌ | 未测 |
 | 高危漏洞 0 | ❌ | 仅有 ruff；无 pip-audit / Trivy |
@@ -65,9 +65,9 @@
 | 双页面 UI | ✅ | `/` 导航页 + `/demo` DeepSeek 式对话台 |
 | 短时记忆 | ✅ | SQLite checkpointer（同步 CLI / 异步 API） |
 | 长期记忆 | ✅ | LangGraph Store，按 `user_id` 存偏好 |
-| Dockerfile / Compose | ❌ | 无 `Dockerfile`、无 `compose.yaml`（PRD 要求 web/api/chroma 三服务） |
+| Dockerfile / Compose | 🟡 | 已提供非 root API Dockerfile、Compose、健康检查与可选 Chroma profile；仍待本机/CI 冷启动实测 |
 | Chainlit | ❌ | 未使用（PRD 指定） |
-| tests/ 目录 | 🟡 | 已建立 pytest 基建及 JSON 修复、SQLite WAL 测试；其余任务测试继续补齐 |
+| tests/ 目录 | 🟡 | 已有 JSON 修复、SQLite WAL、工具并行、反馈 CSV 测试；其余任务测试继续补齐 |
 | intent/plan/safety 评测集 | ❌ | 只有 RAG 的 rag_eval / boundary_eval |
 | GitHub Actions | 🟡 | `ci.yml` 已运行 Agent/API 离线冒烟；仍缺 pytest、rag-eval、container、nightly |
 | AI 辅助开发档案 | 🟡 | `docs/ai-dev-log` 与 `docs/meetings` 已加入 gitignore 白名单并建立模板 |
