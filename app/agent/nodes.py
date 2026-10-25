@@ -723,16 +723,19 @@ def classify_and_extract(state):
                 merged.pop(key, None)
         stamp = now_iso()
 
-    # 天气没给日期时，沿用上一轮行程的天数（先规划3天、再问天气的常见路径）
-    if intent is Intent.WEATHER and not merged.get("date"):
+    # 复合“3天贵阳行程+天气”也要从 days 生成完整天气范围。
+    active_intents = {intent}
+    active_intents.update(_as_intent(task.get("intent")) for task in multi_tasks)
+    needs_date_range = bool(active_intents & {Intent.WEATHER, Intent.ITINERARY})
+    if needs_date_range and not merged.get("end_date"):
         n = merged.get("days")
-        if isinstance(n, int) and 1 <= n <= 14 and not merged.get("end_date"):
+        if isinstance(n, int) and 1 <= n <= 14:
             today = _dt.date.today()
-            merged["date"] = today.isoformat()
-            merged["start_date"] = today.isoformat()
+            merged["date"] = merged.get("date") or today.isoformat()
+            merged["start_date"] = merged.get("start_date") or merged["date"]
             merged["end_date"] = (today + _dt.timedelta(days=n - 1)).isoformat()
             stamp = now_iso()
-            note = (note + "；" if note else "") + "按上一轮行程天数取天气"
+            note = (note + "；" if note else "") + "按行程天数生成日期范围供天气查询"
 
     # —— 长期偏好与跨会话目的地：只补缺失值，不覆盖本轮明确表达 ——
     if not merged.get("preferences") and profile.get("preferences"):
@@ -767,9 +770,22 @@ def classify_and_extract(state):
     province_needs_city = bool(province and (
         not merged.get("destination") or merged.get("destination") == province))
     if province_needs_city:
-        merged.pop("destination", None)
-        note = (note + "；" if note else "") + (
-            "%s是省级行政区，请补充具体城市" % province)
+        default_capital = intent in (Intent.ITINERARY, Intent.DESTINATION)
+        if multi_tasks:
+            default_capital = default_capital or any(
+                task.get("intent") in (Intent.ITINERARY.value, Intent.DESTINATION.value)
+                for task in multi_tasks)
+        capital = slot_lib.PROVINCES.get(province)
+        if default_capital and capital:
+            merged["destination"] = capital
+            destination_source = "province_default"
+            note = (note + "；" if note else "") + (
+                "%s是省级区域，暂按省会%s规划；如需遵义、安顺等请说明" %
+                (province, capital))
+        else:
+            merged.pop("destination", None)
+            note = (note + "；" if note else "") + (
+                "%s是省级行政区，请补充具体城市" % province)
 
     if multi_tasks:
         for task in multi_tasks:
@@ -781,7 +797,7 @@ def classify_and_extract(state):
         ))
     else:
         missing = missing_slots(intent, merged, text)
-    if province_needs_city:
+    if province_needs_city and destination_source != "province_default":
         missing = ["destination_city"]
     elif ambiguous_destination_reference and "destination" not in missing:
         missing.append("destination")
@@ -1390,6 +1406,9 @@ def _destination_source_notice(state: dict) -> str:
     if source == "thread" and _has_destination_reference(state.get("query") or ""):
         return ("你问的“那里”按当前会话最近提到的%s理解。"
                 "如果你指的是其他城市，请直接告诉我城市名。\n\n" % city)
+    if source == "province_default":
+        return ("你给的是省级区域，本轮暂按省会%s规划；"
+                "如需遵义、安顺等其他城市请直接说明。\n\n" % city)
     if source == "profile":
         return ("当前问题没有指定城市，暂按跨会话最近关注的目的地%s回答。"
                 "如需换城市，请直接说明。\n\n" % city)
@@ -1452,6 +1471,15 @@ _TASK_TERMS = {
     Intent.FOOD: ("美食", "餐厅", "小吃", "烤鸭", "菜"),
     Intent.WEATHER: ("天气", "气温", "降水", "℃"),
 }
+_PLACEHOLDER_RE = re.compile(
+    r"^\s*[-*#\s]*(?:建议时长|交通衔接|门票|开放时间|费用)[:：]?"
+    r".{0,12}待确认[。；;]?\s*$")
+
+
+def _is_placeholder_line(line: str) -> bool:
+    return bool(_PLACEHOLDER_RE.match(line or ""))
+
+
 def _answer_completion_issues(state: dict, text: str) -> list:
     """检查句子截断、逐日结构和复合任务覆盖。"""
     issues = []
@@ -1607,7 +1635,8 @@ def compose(state):
                 hint = (hint + "\n" if hint else "") + (
                     "行程必须使用固定骨架：## 第一天（主题），下分“上午/下午/晚间”，"
                     "每项写景点、建议时长和交通衔接；最后写费用小计。第二、三、四天同样结构。"
-                    "证据不足的时段写“待确认”，不得把合理建议伪装成已核实事实。")
+                    "证据未覆盖的属性不要逐条写“待确认”，统一放到末尾“待确认事项”一次说明；"
+                    "不得把合理建议伪装成已核实事实。")
             if state.get("thinking"):
                 hint = (hint + "\n" if hint else "") + (
                     "用户开启了深度思考：请给出更详细的分日安排、取舍理由与注意事项；"
@@ -1686,8 +1715,10 @@ def compose(state):
     if completion_issues:
         degraded = True
 
-    total = len(kept) + len(dropped) + len(unbound)
-    rate = round(len(kept) / total, 4) if total else 0.0
+    rated_kept = [line for line in kept if not _is_placeholder_line(line)]
+    placeholder_count = len(kept) - len(rated_kept)
+    total = len(rated_kept) + len(dropped) + len(unbound)
+    rate = round(len(rated_kept) / total, 4) if total else 0.0
     binding_issue = _binding_below_gate(rate)
     if binding_issue:
         degraded = True
@@ -1717,6 +1748,7 @@ def compose(state):
                               status="degraded" if (degraded or dropped or unbound) else "ok",
                               detail=note or "ok",
                               kept=len(kept), dropped=len(dropped), unbound=len(unbound),
+                              placeholders=placeholder_count,
                               binding_rate=rate, limitations=limitations)],
     }
 
