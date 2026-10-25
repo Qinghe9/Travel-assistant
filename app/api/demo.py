@@ -249,7 +249,7 @@ DEMO_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>旅游规划助手 · Agent 调试台</title>
+<title>旅游对话助手</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>""" + SHARED_CSS + """</style>
 </head>
@@ -288,13 +288,10 @@ DEMO_HTML = """<!doctype html>
         </svg>
       </button>
       <div>
-        <h1>旅游规划助手 · Agent 调试台</h1>
-        <p>LangGraph 状态图 + RAG + 工具调用</p>
+        <h1>旅游对话助手</h1>
+        <p>告诉我你想去哪里，我可以帮你规划行程、查询天气、交通、住宿和美食。</p>
       </div>
       <div class="top-links">
-        <span class="prefs" id="prefsChip"></span>
-        <a href="/demo">打开调试台</a>
-        <a href="/docs">Swagger 文档</a>
         <a href="/health">健康检查</a>
       </div>
     </header>
@@ -349,7 +346,6 @@ const historyBox = $('history');
 const input = $('msg');
 const sendBtn = $('send');
 const sidebar = $('sidebar');
-const prefsChip = $('prefsChip');
 
 let convs = loadConvs();
 let currentId = null;
@@ -669,13 +665,6 @@ function showError(refs, message){
   refs.err.appendChild(strong); refs.err.appendChild(pre);
 }
 
-function setPrefs(profile){
-  const prefs = (profile && profile.preferences) || [];
-  if (!prefs.length){ prefsChip.style.display = 'none'; return; }
-  prefsChip.style.display = 'inline-block';
-  prefsChip.textContent = '长期偏好 · ' + prefs.slice(0, 3).join(' / ');
-}
-
 function autoGrow(){
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 150) + 'px';
@@ -763,7 +752,6 @@ async function send(){
           msg.citations = evt.citations || [];
           renderAnswer(refs.bubble, msg.content, msg.citations);
           appendSources(refs.card, msg.citations);
-          if (evt.profile) setPrefs(evt.profile);
           finished = true;
         } else if (evt.type === 'error'){
           msg.error = evt.message || '未知错误';
