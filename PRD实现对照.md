@@ -27,13 +27,13 @@
 
 | 编号 | 要求 | 状态 | 说明 |
 |---|---|---|---|
-| FR-01 | 意图 + 结构化槽位；解析失败修复一次 | 🟡 | **JevK5 决策路由（confidence + probabilities）** + LLM 槽位 + Pydantic + 规则降级；**没有"修复一次"重试**；没有 intent/slot 评测集 |
+| FR-01 | 意图 + 结构化槽位；解析失败修复一次 | 🟡 | JevK5 + LLM 槽位 + Pydantic + 规则降级；已实现解析/校验失败后自动修复一次；仍缺 intent/slot 正式评测集 |
 | FR-02 | 目的地检索，展示名称/简介/位置/来源/时间 | 🟡 | 高德 POI 名称/区域/地址 + 来源；简介来自 RAG；**没有开放状态校验** |
 | FR-03 | 逐日行程、时段、时长、交通、天气适配、预算小计、冲突检查 | ❌ | 目前只输出文字建议；`validate_plan` 只检查天数/预算粗略冲突 |
 | FR-04 | 航班/铁路/酒店正式 API | 🟡 | **酒店名称已接入高德 POI**（place/around，types=100000/100100/100200）；航班/铁路仍无凭据；价格/库存未接入 |
 | FR-05 | 天气 API，失败重试 2 次指数退避 | 🟡 | 天气可用；缓存 30 分钟；**工具层没有重试/退避** |
 | FR-06 | 向量 + BM25 + RRF，逐句引用，Top3≥95% | 🟡 | RAG 模块达标（基线 Recall@3 0.9845 / MRR 0.9601）；Agent 端有引用后置校验；**未做 Agent 级 RAG 评测**；绑定率常在 0.38~0.83（未绑定句子被剔除） |
-| FR-07 | thread_id 记忆、10 轮、重启恢复 | 🟡 | SQLite 短期记忆、跨进程恢复已验证；长期偏好 Store 已加；**没有 10 轮回归**；历史只带最近 2 轮给模型；**工具摘要未持久化**；没有 summary/trimming |
+| FR-07 | thread_id 记忆、10 轮、重启恢复 | 🟡 | SQLite 短期记忆、跨进程恢复已验证；同步/异步连接与长期 Store 已启用 WAL/busy_timeout；仍缺 10 轮回归、工具摘要入提示和 summary/trimming |
 | FR-08 | Chainlit 展示步骤与耗时 | 🟡 | 自研 `/demo` 已展示步骤/耗时/引用；**不是 Chainlit** |
 | FR-09 | 点赞/点踩、SQLite、CSV 导出 | 🟡 | `/api/v1/feedback` 写 JSONL；**无 UI 按钮、未入 SQLite、无 CSV 导出** |
 | FR-10 | 提示注入、密钥探测、越权参数 | 🟡 | 提示词含注入防护；工具参数按签名白名单过滤；**没有安全评测集、没有限流** |
@@ -67,10 +67,10 @@
 | 长期记忆 | ✅ | LangGraph Store，按 `user_id` 存偏好 |
 | Dockerfile / Compose | ❌ | 无 `Dockerfile`、无 `compose.yaml`（PRD 要求 web/api/chroma 三服务） |
 | Chainlit | ❌ | 未使用（PRD 指定） |
-| tests/ 目录 | ❌ | 只有 `scripts/smoke_*` 冒烟 |
+| tests/ 目录 | 🟡 | 已建立 pytest 基建及 JSON 修复、SQLite WAL 测试；其余任务测试继续补齐 |
 | intent/plan/safety 评测集 | ❌ | 只有 RAG 的 rag_eval / boundary_eval |
-| GitHub Actions | 🟡 | 只有 `ci.yml`、`ai-review.yml`；缺 rag-eval、container、nightly |
-| AI 辅助开发档案 | ❌ | 任务书硬性要求；`docs/` 被 gitignore |
+| GitHub Actions | 🟡 | `ci.yml` 已运行 Agent/API 离线冒烟；仍缺 pytest、rag-eval、container、nightly |
+| AI 辅助开发档案 | 🟡 | `docs/ai-dev-log` 与 `docs/meetings` 已加入 gitignore 白名单并建立模板 |
 | 系统设计/测试/部署文档、PPT | ❌ | 尚未产出 |
 | 私有/公开来源指标 | ❌ | 现有 17553 chunk 全部 `source_type=public` |
 | 数据文件完整性 | 🟡 | `data/scope_cities.json`、`data/china_scope_titles.json` 缺失（Agent 有内置城市表兜底） |
