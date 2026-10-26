@@ -1,3 +1,5 @@
+from app.tools.showapi import ShowAPIHoliday
+
 from app.agent import nodes, prompts
 from app.models.schemas import Intent
 from app.rag.generation.answer import post_validate
@@ -71,3 +73,74 @@ def test_day_headings_not_inserted_when_count_is_unreliable():
     state = {"slots": {"days": 3}, "tool_results": []}
     text = "- **上午**：景点A\n- **下午**：景点B"
     assert nodes._insert_itinerary_day_headings(text, state) == text
+
+
+def test_placeholder_fields_removed_but_real_transport_kept():
+    text = (
+        "- **上午**：西安城墙（步行约11.4km，约3-3.5小时）\n"
+        "> 交通衔接：城墙步行全长约11.4km，全程约3-3.5小时\n"
+        "- **晚间**：证据未提供晚间可安排的具体景点\n"
+        "- **上午**：凯里市区自由活动（证据未提供更多可排入景点）\n"
+        "- **上午至下午**：凯里市区自由活动（证据未提供更多可排入景点）\n"
+        "- **上午至下午**：凯里市区自由活动，可围绕已列景点周边安排休闲游览 [1]\n"
+        "- 交通衔接：证据未提供各景点间交通方式与耗时"
+    )
+    cleaned, removed = nodes._remove_field_placeholders(text)
+    assert removed == 5
+    assert "城墙步行全长约11.4km" in cleaned
+    assert "证据未提供" not in cleaned
+
+
+def test_paused_poi_is_filtered_and_disclosed():
+    evidence = [{
+        "source_id": SID,
+        "title": "凯里景点",
+        "kind": "amap-poi",
+        "text": "云谷田园目前暂停开放。云谷田园位于凯里郊区。下司古镇正常开放。",
+    }]
+    filtered, paused = nodes._filter_paused_evidence(evidence)
+    assert "云谷田园" in paused
+    assert "云谷田园" not in filtered[0]["text"]
+    assert "下司古镇" in filtered[0]["text"]
+
+    cleaned, removed = nodes._strip_paused_itinerary_lines(
+        "- **上午**：云谷田园目前暂停开放，不宜安排\n- **下午**：下司古镇",
+        paused,
+    )
+    assert removed == 1
+    assert "云谷田园" not in cleaned
+    assert "下司古镇" in cleaned
+
+
+def test_paused_poi_is_removed_from_tool_lists_and_points():
+    result = {
+        "provider": "amap-poi",
+        "fetched_at": "2026-10-26T12:00:00",
+        "data": {
+            "景点": ["下司古镇（凯里市）", "云谷田园(暂停开放)（凯里市）"],
+            "_points": [
+                {"name": "下司古镇", "location": "1,2"},
+                {"name": "云谷田园", "location": "3,4"},
+            ],
+            "_source_hint": "凯里",
+        },
+    }
+    paused = nodes._filter_paused_tool_results([result])
+    assert "云谷田园" in paused
+    assert result["data"]["景点"] == ["下司古镇（凯里市）"]
+    assert [point["name"] for point in result["data"]["_points"]] == ["下司古镇"]
+
+
+def test_holiday_result_does_not_leak_internal_boolean(monkeypatch):
+    import app.tools.showapi as showapi
+
+    monkeypatch.setattr(showapi, "app_key", lambda: "test")
+    monkeypatch.setattr(showapi, "_call", lambda *args, **kwargs: {
+        "cn": "周一", "holiday": "无", "type": "0",
+        "begin": "", "end": "", "holiday_remark": "",
+    })
+    result = ShowAPIHoliday().fetch(date="2026-10-26")
+    assert result.status.value == "ok"
+    assert result.data["日期性质"] == "非节假日"
+    assert result.data["日期说明"] == "2026-10-26为周一，非节假日"
+    assert "是否假日" not in result.data

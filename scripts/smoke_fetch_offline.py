@@ -40,9 +40,11 @@ SAMPLE = """{{pagebanner|Chengdu banner.jpg}}
 """
 
 FAIL = []
+TOTAL = [0]
 
 
 def check(name, ok, detail=""):
+    TOTAL[0] += 1
     print("%s %-42s %s" % ("PASS" if ok else "FAIL", name, detail))
     if not ok:
         FAIL.append(name)
@@ -92,7 +94,10 @@ from app.rag.retrieval.fuse import dedup_by_parent  # noqa: E402
 items = [{"chunk_id": "1", "metadata": {"parent_doc_id": "p"}},
          {"chunk_id": "2", "metadata": {"parent_doc_id": "p"}},
          {"chunk_id": "3", "metadata": {"parent_doc_id": "p"}}]
-check("同源每篇最多保留 2 条", len(dedup_by_parent(items)) == 2)
+expected_parent_limit = min(len(items), cfg.MAX_PER_PARENT)
+check("同源项按显式上限过滤", len(dedup_by_parent(items, max_per_parent=2)) == 2)
+check("同源项默认读取当前配置", len(dedup_by_parent(items)) == expected_parent_limit,
+      "%d 条（上限 %d）" % (len(dedup_by_parent(items)), cfg.MAX_PER_PARENT))
 
 from app.rag.indexing.geo import GeoIndex  # noqa: E402
 geo = GeoIndex()
@@ -134,5 +139,5 @@ rewritten, slots = prepare_turn("它的开放时间是什么？", session)
 check("多轮追问继承实体", "武侯祠" in rewritten and slots.get("entity") == "武侯祠", rewritten)
 
 print("-" * 60)
-print("通过 %d 项，失败 %d 项" % (19 - len(FAIL), len(FAIL)))
+print("通过 %d 项，失败 %d 项" % (TOTAL[0] - len(FAIL), len(FAIL)))
 sys.exit(1 if FAIL else 0)
