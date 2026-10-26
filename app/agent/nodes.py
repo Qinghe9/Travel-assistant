@@ -1622,6 +1622,9 @@ _FIELD_PLACEHOLDER_RE = re.compile(
 _PLACEHOLDER_PHRASE_RE = re.compile(r"证据(?:中)?未提供|证据未给出|需另行查询")
 _TRANSPORT_LINE_RE = re.compile(
     r"^\s*[-*]?\s*(?:\*\*)?交通衔接(?:\*\*)?\s*[：:]")
+_GENERIC_ACTIVITY_RE = re.compile(
+    r"^(?:[\u4e00-\u9fff]{2,6})?(?:市区|城区|周边)"
+    r"(?:自由活动|活动|自由安排|休闲).*$")
 _PAUSED_MARKER_RE = re.compile(r"暂停开放|暂停营业|闭馆|关闭中|临时关闭")
 
 
@@ -1663,8 +1666,12 @@ def _remove_field_placeholders(text: str) -> tuple[str, int]:
     kept = []
     removed = 0
     for line in (text or "").splitlines():
+        period = _PERIOD_LINE_RE.match(line)
+        generic_activity = bool(
+            period and _GENERIC_ACTIVITY_RE.match(period.group(2).strip()))
         if (_FIELD_PLACEHOLDER_RE.match(line)
-                or ((_PERIOD_LINE_RE.match(line) or _TRANSPORT_LINE_RE.match(line))
+                or generic_activity
+                or ((period or _TRANSPORT_LINE_RE.match(line))
                     and _PLACEHOLDER_PHRASE_RE.search(line))):
             removed += 1
             continue

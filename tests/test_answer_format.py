@@ -82,10 +82,11 @@ def test_placeholder_fields_removed_but_real_transport_kept():
         "- **晚间**：证据未提供晚间可安排的具体景点\n"
         "- **上午**：凯里市区自由活动（证据未提供更多可排入景点）\n"
         "- **上午至下午**：凯里市区自由活动（证据未提供更多可排入景点）\n"
+        "- **上午至下午**：凯里市区自由活动，可围绕已列景点周边安排休闲游览 [1]\n"
         "- 交通衔接：证据未提供各景点间交通方式与耗时"
     )
     cleaned, removed = nodes._remove_field_placeholders(text)
-    assert removed == 4
+    assert removed == 5
     assert "城墙步行全长约11.4km" in cleaned
     assert "证据未提供" not in cleaned
 
