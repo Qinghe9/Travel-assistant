@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import struct
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -73,7 +74,10 @@ class EmbedCache:
 
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(path))
+        # LangGraph 的同步节点会在工作线程里跑，而 Embedder 是进程级单例：
+        # 连接必须允许跨线程；同时用锁串行化 SQLite 访问（连接本身不保证并发安全）。
+        self.conn = sqlite3.connect(str(path), check_same_thread=False)
+        self._lock = threading.RLock()
         self.conn.execute("CREATE TABLE IF NOT EXISTS embed_cache ("
                           "content_hash TEXT, model TEXT, dim INTEGER, vec BLOB, "
                           "PRIMARY KEY (content_hash, model))")
@@ -81,25 +85,29 @@ class EmbedCache:
 
     def get_many(self, keys, model):
         out, missing = {}, []
-        cur = self.conn.cursor()
-        for k in keys:
-            row = cur.execute("SELECT dim, vec FROM embed_cache WHERE content_hash=? AND model=?",
-                              (k, model)).fetchone()
-            if row:
-                out[k] = list(struct.unpack("<%df" % row[0], row[1]))
-            else:
-                missing.append(k)
+        with self._lock:
+            cur = self.conn.cursor()
+            for k in keys:
+                row = cur.execute("SELECT dim, vec FROM embed_cache WHERE content_hash=? AND model=?",
+                                  (k, model)).fetchone()
+                if row:
+                    out[k] = list(struct.unpack("<%df" % row[0], row[1]))
+                else:
+                    missing.append(k)
         return out, missing
 
     def put_many(self, model, items):
-        self.conn.executemany(
-            "INSERT OR REPLACE INTO embed_cache (content_hash, model, dim, vec) VALUES (?,?,?,?)",
-            [(k, model, len(v), struct.pack("<%df" % len(v), *v)) for k, v in items])
-        self.conn.commit()
+        with self._lock:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO embed_cache (content_hash, model, dim, vec) VALUES (?,?,?,?)",
+                [(k, model, len(v), struct.pack("<%df" % len(v), *v)) for k, v in items])
+            self.conn.commit()
 
     def stats(self, model):
-        row = self.conn.execute("SELECT COUNT(*) FROM embed_cache WHERE model=?", (model,)).fetchone()
-        return row[0] if row else 0
+        with self._lock:
+            row = self.conn.execute("SELECT COUNT(*) FROM embed_cache WHERE model=?",
+                                    (model,)).fetchone()
+            return row[0] if row else 0
 
 
 class Embedder:

@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
       - name: 安装 ruff
         run: python -m pip install --upgrade pip ruff
       - name: ruff（高信号规则：语法错误、未定义名、格式化错误）
@@ -36,10 +36,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
-      - name: 安装依赖（离线链路只用到轻依赖；chromadb / sentence-transformers 均为惰性导入）
+          python-version: "3.12"
+      - name: 安装统一依赖
         run: |
           python -m pip install --upgrade pip
-          pip install zhconv jieba rank-bm25 numpy
+          pip install -r requirements.txt
       - name: 数据源适配器 / 清洗 / 切分 / 融合 冒烟
         run: python scripts/smoke_fetch_offline.py
+      - name: Agent / API 离线冒烟
+        run: |
+          python scripts/smoke_agent_offline.py
+          python scripts/smoke_api_offline.py
