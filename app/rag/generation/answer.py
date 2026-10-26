@@ -23,6 +23,7 @@ SENT_SPLIT = re.compile(
     r"(?<=[。！？!?])(?!(?:\s*[\[【]\s*[0-9a-fA-F]{8,16}\s*[\]】]))"
 )
 SID_RE = re.compile(r"[\[【]\s*([0-9a-fA-F]{8,16})\s*[\]】]")
+STRUCTURAL_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s+|>\s*)")
 
 
 def build_messages(evidence, max_chunks=3):
@@ -59,6 +60,13 @@ def post_validate(text, citations):
     kept, dropped, unbound = [], [], []
     out_lines = []
     for line in (text or "").split("\n"):
+        if not line.strip():
+            out_lines.append("")
+            continue
+        # 标题和引用块是视觉结构，不是事实句，不要求 source_id。
+        if STRUCTURAL_LINE_RE.match(line):
+            out_lines.append(line.rstrip())
+            continue
         line_kept = []
         for raw in SENT_SPLIT.split(line):
             s = raw.strip()

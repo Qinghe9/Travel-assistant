@@ -20,7 +20,7 @@ def test_same_attraction_is_not_split_into_two_periods():
         "- 下午：同景区继续游览，建议时长待确认 [1]。"
     )
     merged = _coalesce_same_attraction_periods(text)
-    assert "上午至下午：鸣沙山月牙泉风景名胜区" in merged
+    assert "**上午至下午**：鸣沙山月牙泉风景名胜区" in merged
     assert "下午：同景区继续" not in merged
     assert merged.count("鸣沙山月牙泉") == 1
 
@@ -31,5 +31,5 @@ def test_same_attraction_phrase_variant_is_merged():
         "- 下午：同一景区不重复安排，可在景区内继续游览 [1]。"
     )
     merged = _coalesce_same_attraction_periods(text)
-    assert "上午至下午：鸣沙山月牙泉风景名胜区" in merged
+    assert "**上午至下午**：鸣沙山月牙泉风景名胜区" in merged
     assert "下午：同一景区" not in merged

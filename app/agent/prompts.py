@@ -114,6 +114,82 @@ COMPOSE_SYSTEM = """你是旅游知识问答助手，只依据<证据>作答，�
 时长、票价或线路写到另一个方案上。
 用简体中文作答：事实题简洁回答，推荐或规划题可分 3-5 点。"""
 
+_COMMON_FORMAT_RULE = """
+【答案视觉格式】
+较长的推荐、规划或复合答案必须使用 Markdown 分级结构，不要输出代码块：
+- 顶级节使用 `# 一、`、`# 二、`；
+- 行程天使用 `## 第 1 天｜主题`；
+- 上午/下午/晚间使用 `**上午**：` 等加粗写法；
+- 系统性缺口、限制、状态说明使用 `> ` 引用块，不混入景点列表；
+- 引用编号保持 `[n]`，并放在事实句末尾。
+标题和引用块是结构行，不要给它们虚构引用。
+"""
+
+_ITINERARY_FORMAT_RULE = """
+行程答案必须严格使用以下骨架，缺天级标题会被判为不完整并重写：
+
+# 一、{days}天行程
+## 第 1 天｜主题
+- **上午**：景点（地址）· 建议约 X 小时 [1]
+- **下午**：景点（地址）· 建议约 X 小时 [1]
+- **晚间**：景点（地址）· 建议约 X 小时 [1]
+> 交通衔接：证据未提供时在这里统一说明 [2]
+
+## 第 2 天｜主题
+- **上午**：景点（地址）· 建议约 X 小时 [1]
+- **下午**：景点（地址）· 建议约 X 小时 [1]
+
+# 二、未来{days}天天气
+- 10月26日：天气，最低~最高℃，降水概率 X% [3]
+
+# 三、使用说明
+> 检索中心、证据缺口和待确认事项统一放在这里。
+
+不要平铺成一整列。天与天之间空一行；同一天只列上午/下午/晚间实际存在的时段。
+"""
+
+_SINGLE_INTENT_FORMAT_RULES = {
+    Intent.FOOD: """
+美食长答案使用：# 一、特色菜；# 二、小吃；# 三、附近餐厅。
+附近餐厅列表放在最后，知识库菜品介绍不能被工具餐厅名单替代。
+""",
+    Intent.HOTEL: """
+住宿长答案使用：# 一、推荐酒店；# 二、区域说明。
+酒店名单来自本轮工具；区域说明和待确认事项放在第二节。
+""",
+    Intent.DESTINATION: """
+景点长答案使用：# 一、必去景点；# 二、补充信息。
+补充信息、开放状态限制和检索中心说明放在第二节。
+""",
+    Intent.WEATHER: """
+多日天气使用：# 一、逐日天气。每一天一行；空气质量和区域回退说明放在引用块。
+""",
+    Intent.TRANSPORT: """
+交通长答案使用：# 一、方案比较；# 二、使用说明。
+不同方案的里程、时长和票价不得串行；未提供实时余票时在使用说明中注明。
+""",
+}
+
+
+def answer_format_rule(intents: list, days: int = None) -> str:
+    """返回与意图匹配的 Markdown 视觉语法规则。"""
+    selected = list(dict.fromkeys(intents or []))
+    parts = [_COMMON_FORMAT_RULE.strip()]
+    if Intent.ITINERARY in selected or Intent.ITINERARY.value in selected:
+        parts.append(_ITINERARY_FORMAT_RULE.format(days=days or "N").strip())
+    for intent in selected:
+        if intent in (Intent.ITINERARY, Intent.ITINERARY.value):
+            continue
+        rule = _SINGLE_INTENT_FORMAT_RULES.get(intent)
+        if rule:
+            parts.append(rule.strip())
+    if len(selected) > 1:
+        parts.append(
+            "复合请求的每个任务使用独立顶级节，按用户询问顺序排列；"
+            "事实分别引用各自证据，末尾统一使用“限制与待确认”引用块。")
+    return "\n\n".join(parts)
+
+
 CLARIFY_TEMPLATE = "为了给你准确的建议，请补充：%s？"
 
 

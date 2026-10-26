@@ -193,7 +193,7 @@ _heading_text = nodes._ensure_task_headings(
     _multi_state)
 check("复合任务自动插入稳定标题",
       all(title in _heading_text for title in
-          ("**景点推荐**", "**交通方案**", "**美食推荐**", "**住宿建议**")),
+          ("## 景点推荐", "## 交通方案", "## 美食推荐", "## 住宿建议")),
       _heading_text)
 check("长期偏好会显式提示",
       "亲子" in nodes._profile_preference_notice(
@@ -695,7 +695,8 @@ check("答案带脚注编号", "[1]" in answer or "[2]" in answer, answer[:60])
 check("正文不再出现 hex 编号", re.search(r"\[[0-9a-fA-F]{8,16}\]", answer) is None, answer[:60])
 
 fact_lines = [line for line in answer.split("\n")
-              if line.strip() and not line.startswith("说明") and not line.startswith("- ")
+              if line.strip() and not nodes._is_structural_line(line)
+              and not line.startswith("说明") and not line.startswith("- ")
               and not line.startswith("知识库中") and not line.startswith("已结合")
               and not line.startswith("完整性提示")]
 bound = [line for line in fact_lines if re.search(r"\[\d+\]", line)]

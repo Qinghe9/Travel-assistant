@@ -1400,9 +1400,10 @@ def _with_notes(answer: str, unavailable: list) -> str:
     """把「哪些能力不可用」如实告诉用户（这是系统状态说明，不是事实陈述）。"""
     if not unavailable:
         return answer
-    lines = [answer, "", "说明（系统状态）："]
+    lines = [answer, "", "> **说明（系统状态）**"]
     for item in unavailable:
-        lines.append("- %s：%s" % (item.get("provider"), item.get("message") or item.get("error_code")))
+        lines.append("> - %s：%s" % (
+            item.get("provider"), item.get("message") or item.get("error_code")))
     return "\n".join(lines)
 
 
@@ -1534,19 +1535,20 @@ def _destination_source_notice(state: dict) -> str:
     if not city:
         return ""
     if source == "thread" and _has_destination_reference(state.get("query") or ""):
-        return ("你问的“那里”按当前会话最近提到的%s理解。"
+        return ("> **上下文理解**：你问的“那里”按当前会话最近提到的%s理解。"
                 "如果你指的是其他城市，请直接告诉我城市名。\n\n" % city)
     if source == "province_default":
-        return ("你给的是省级区域，本轮暂按省会%s规划；"
+        return ("> **省级默认**：你给的是省级区域，本轮暂按省会%s规划；"
                 "如需遵义、安顺等其他城市请直接说明。\n\n" % city)
     if source == "profile":
-        return ("当前问题没有指定城市，暂按跨会话最近关注的目的地%s回答。"
+        return ("> **记忆承接**：当前问题没有指定城市，暂按跨会话最近关注的目的地%s回答。"
                 "如需换城市，请直接说明。\n\n" % city)
     return ""
 
 
 _PERIOD_LINE_RE = re.compile(
-    r"^\s*[-*]\s*(上午|下午|晚间)\s*[：:]\s*(.+?)\s*$")
+    r"^\s*[-*]\s*(?:\*\*)?(上午|下午|晚间)(?:\*\*)?\s*[：:]\s*(.+?)\s*$")
+_STRUCTURAL_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s+|>\s*)")
 
 
 def _coalesce_same_attraction_periods(text: str) -> str:
@@ -1572,14 +1574,80 @@ def _coalesce_same_attraction_periods(text: str) -> str:
             out.append(line)
             continue
         merged = re.sub(
-            r"^\s*[-*]\s*(上午|下午|晚间)\s*[：:]",
-            "- %s至%s：" % (previous.group(1), match.group(1)),
+            r"^\s*[-*]\s*(?:\*\*)?(上午|下午|晚间)(?:\*\*)?\s*[：:]",
+            "- **%s至%s**：" % (previous.group(1), match.group(1)),
             out[-1],
             count=1,
         ).rstrip("。；; ")
         merged += "；同一景区连续游览，合并为一个景点，不重复计数。"
         out[-1] = merged
     return "\n".join(out)
+
+
+_DAY_HEADING_RE = re.compile(
+    r"第\s*([0-9]+|[一二两三四五六七八九十]+)\s*天")
+_DAY_NUMBERS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+                "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _day_number(value: str):
+    if value.isdigit():
+        return int(value)
+    if value == "十":
+        return 10
+    if "十" in value:
+        head, _, tail = value.partition("十")
+        return (_DAY_NUMBERS.get(head, 1) if head else 1) * 10 + _DAY_NUMBERS.get(tail, 0)
+    return _DAY_NUMBERS.get(value)
+
+
+def _reliable_itinerary_days(state: dict):
+    slots = state.get("slots") or {}
+    try:
+        days = int(slots.get("days"))
+    except (TypeError, ValueError):
+        return None
+    if not (1 <= days <= 14):
+        return None
+    try:
+        start = _dt.date.fromisoformat(str(slots.get("start_date") or slots.get("date")))
+        end = _dt.date.fromisoformat(str(slots.get("end_date")))
+        if (end - start).days + 1 == days:
+            return days
+    except (TypeError, ValueError):
+        pass
+    for item in state.get("tool_results") or []:
+        if item.get("status") != _INT_TOOL_OK or not _is_weather_provider(item.get("provider")):
+            continue
+        forecasts = (item.get("data") or {}).get("预报") or []
+        if isinstance(forecasts, list) and len(forecasts) == days:
+            return days
+    return None
+
+
+def _insert_itinerary_day_headings(text: str, state: dict) -> str:
+    """缺天标题且天气/日期可可靠确认天数时，保守插入待补充主题标题。"""
+    lines = (text or "").splitlines()
+    existing = [_day_number(m.group(1)) for m in _DAY_HEADING_RE.finditer(text or "")]
+    if len([day for day in existing if day]) >= 1:
+        return text
+    days = _reliable_itinerary_days(state)
+    if not days:
+        return text
+    morning_indexes = [
+        index for index, line in enumerate(lines)
+        if _PERIOD_LINE_RE.match(line) and _PERIOD_LINE_RE.match(line).group(1) == "上午"
+    ]
+    if len(morning_indexes) != days:
+        return text
+    for day, index in enumerate(morning_indexes, start=1):
+        offset = index + (day - 1) * 2
+        lines[offset:offset] = ["## 第 %d 天｜待补充主题" % day, ""]
+    return "\n".join(lines)
+
+
+def _is_structural_line(line: str) -> bool:
+    return bool(_STRUCTURAL_LINE_RE.match(line or ""))
 
 
 def _ensure_task_headings(text: str, state: dict) -> str:
@@ -1609,7 +1677,53 @@ def _ensure_task_headings(text: str, state: dict) -> str:
         index = next((i for i, line in enumerate(lines)
                       if pattern.search(line) and not line.startswith("已结合")), None)
         if index is not None:
-            lines.insert(index, "**%s**" % title)
+            lines.insert(index, "## %s" % title)
+    return "\n".join(lines)
+
+
+def _ensure_top_level_sections(text: str, state: dict) -> str:
+    """为平铺长答案补最少一级标题；行程额外拆出行程/天气/说明。"""
+    lines = (text or "").splitlines()
+    intents = _intents_of(state)
+    if not lines:
+        return text
+    if Intent.ITINERARY in intents:
+        first_day = next((i for i, line in enumerate(lines)
+                          if re.match(r"^\s*#{1,6}\s*第\s*[0-9一二两三四五六七八九十]+\s*天",
+                                      line)), None)
+        if first_day is None:
+            first_day = next((i for i, line in enumerate(lines)
+                              if _PERIOD_LINE_RE.match(line)), 0)
+        if not any(re.match(r"^\s*#\s+一、", line) for line in lines):
+            days = (state.get("slots") or {}).get("days") or "N"
+            lines[first_day:first_day] = ["# 一、%s天行程" % days, ""]
+        if not any(re.match(r"^\s*#\s+二、", line) for line in lines):
+            weather_index = next((i for i, line in enumerate(lines)
+                                  if re.match(r"^\s*[-*]\s*(?:\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}日)",
+                                              line)), None)
+            if weather_index is not None:
+                days = (state.get("slots") or {}).get("days") or "N"
+                lines[weather_index:weather_index] = ["# 二、未来%s天天气" % days, ""]
+        if not any(re.match(r"^\s*#\s+三、", line) for line in lines):
+            usage_index = next((i for i, line in enumerate(lines)
+                                if line.startswith("> **限制与待确认**")
+                                or line.startswith("> **说明（系统状态）**")), None)
+            if usage_index is not None:
+                lines[usage_index:usage_index] = ["# 三、使用说明", ""]
+        return "\n".join(lines)
+
+    if any(re.match(r"^\s*#\s+", line) for line in lines):
+        return text
+    title = {
+        Intent.DESTINATION: "# 一、必去景点",
+        Intent.FOOD: "# 一、美食推荐",
+        Intent.HOTEL: "# 一、推荐酒店",
+        Intent.WEATHER: "# 一、逐日天气",
+        Intent.TRANSPORT: "# 一、交通方案",
+    }.get(intents[0]) if len(intents) == 1 else None
+    if title:
+        first = next((i for i, line in enumerate(lines) if line.strip()), 0)
+        lines[first:first] = [title, ""]
     return "\n".join(lines)
 
 
@@ -1654,22 +1768,32 @@ def _answer_completion_issues(state: dict, text: str) -> list:
     if not content:
         return ["回答为空"]
     core = re.sub(r"(?:\s*\[\d+\])+\s*$", "", content).rstrip()
-    if not re.search(r"[。！？.!?）)\]】]$", core):
+    last_line = core.splitlines()[-1].strip() if core.splitlines() else ""
+    structured_tail = bool(re.match(r"^(?:[-*]|>|#)", last_line))
+    if not structured_tail and not re.search(r"[。！？.!?）)\]】]$", core):
         issues.append("回答结尾不完整")
     intents = _intents_of(state)
     if Intent.ITINERARY in intents:
         days = int((state.get("slots") or {}).get("days") or 0)
-        labels = ["第一天", "第二天", "第三天", "第四天", "第五天"]
-        need = labels[:min(max(days, 1), len(labels))]
+        day_matches = {}
+        for match in _DAY_HEADING_RE.finditer(content):
+            number = _day_number(match.group(1))
+            if number and number not in day_matches:
+                day_matches[number] = match
         if days:
             costs = []
-            for index, label in enumerate(need):
-                if label not in content:
+            for day in range(1, days + 1):
+                match = day_matches.get(day)
+                if not match:
                     issues.append("缺少完整逐日结构")
                     break
-                start = content.find(label)
-                end = content.find(need[index + 1], start) if index + 1 < len(need) else len(content)
-                segment = content[start:end if end > start else len(content)]
+                start = match.start()
+                later = [item.start() for item in day_matches.values()
+                         if item.start() > start]
+                end = min(later) if later else len(content)
+                segment = content[start:end]
+                label = "第%s天" % ("一二三四五六七八九十"[day - 1]
+                                    if day <= 10 else str(day))
                 if not any(period in segment for period in ("上午", "下午", "晚间")):
                     issues.append("%s缺少上午/下午/晚间时段" % label)
                 ranges = []
@@ -1805,8 +1929,6 @@ def compose(state):
                 )
             if Intent.ITINERARY in intents:
                 hint = (hint + "\n" if hint else "") + (
-                    "行程必须使用固定骨架：## 第一天（主题），下分“上午/下午/晚间”，"
-                    "每项写景点、建议时长和交通衔接；最后写费用小计。第二、三、四天同样结构。"
                     "同一景区的不同名称变体或相邻 POI 只能出现一次，不得拆成上午/下午两个独立景点；"
                     "证据未覆盖的属性不要逐条写“待确认”，统一放到末尾“待确认事项”一次说明；"
                     "不得把合理建议伪装成已核实事实。")
@@ -1826,6 +1948,8 @@ def compose(state):
                 hint = (hint + "\n" if hint else "") + (
                     "美食查询：知识库用于菜品/小吃介绍，高德工具用于餐厅名称；"
                     "分开列，不要编造菜品、价格或营业时间。")
+            hint = (hint + "\n" if hint else "") + prompts.answer_format_rule(
+                intents, days=(state.get("slots") or {}).get("days"))
             res = llm.chat_stream(prompts.compose_messages(
                                       _evidence_block(picked, limit=len(picked), per_chars=700),
                                       query, extra_rule=hint),
@@ -1842,7 +1966,10 @@ def compose(state):
         try:
             from app.rag.generation.answer import post_validate
             kept_text, dropped, unbound = post_validate(text, citations)
-            kept = [line for line in kept_text.split("\n") if line.strip()]
+            kept = kept_text.splitlines()
+            if Intent.ITINERARY in intents:
+                kept = _insert_itinerary_day_headings(
+                    "\n".join(kept), state).splitlines()
         except Exception as exc:
             note = "%s；引用校验不可用：%s" % (note, exc)
 
@@ -1875,7 +2002,10 @@ def compose(state):
                 from app.rag.generation.answer import post_validate
                 retry_kept_text, retry_dropped, retry_unbound = post_validate(
                     retry_text, citations)
-                retry_kept = [line for line in retry_kept_text.split("\n") if line.strip()]
+                retry_kept = retry_kept_text.splitlines()
+                if Intent.ITINERARY in intents:
+                    retry_kept = _insert_itinerary_day_headings(
+                        "\n".join(retry_kept), state).splitlines()
                 retry_issues = _answer_completion_issues(state, "\n".join(retry_kept))
                 if retry_kept and len(retry_issues) < len(completion_issues):
                     kept = retry_kept
@@ -1888,8 +2018,12 @@ def compose(state):
     if completion_issues:
         degraded = True
 
-    rated_kept = [line for line in kept if not _is_placeholder_line(line)]
-    placeholder_count = len(kept) - len(rated_kept)
+    content_lines = [line for line in kept if line.strip()]
+    rated_kept = [line for line in content_lines
+                  if not _is_placeholder_line(line)
+                  and not _is_structural_line(line)]
+    placeholder_count = sum(1 for line in content_lines if _is_placeholder_line(line))
+    structural_count = sum(1 for line in content_lines if _is_structural_line(line))
     total = len(rated_kept) + len(dropped) + len(unbound)
     rate = round(len(rated_kept) / total, 4) if total else 0.0
     binding_issue = _binding_below_gate(rate)
@@ -1906,11 +2040,14 @@ def compose(state):
     if binding_issue:
         limitations.append("证据绑定率为 %.0f%%，低于 70%% 的规划质量门槛。" % (rate * 100))
     if limitations and "限制与待确认" not in numbered:
-        numbered += "\n\n限制与待确认：\n" + "\n".join("- " + line for line in limitations)
+        numbered += "\n\n> **限制与待确认**\n" + "\n".join(
+            "> - " + line for line in limitations)
     if completion_issues:
-        numbered += ("\n\n说明（系统状态）：受当前证据限制，本轮输出为分日建议而非完整逐日行程。"
+        numbered += ("\n\n> **说明（系统状态）**：受当前证据限制，"
+                     "本轮输出为分日建议而非完整逐日行程。"
                      "缺口：%s。可补充落脚区域、必去景点或交通偏好后继续细化。"
                      % "、".join(completion_issues))
+    numbered = _ensure_top_level_sections(numbered, state)
     numbered = _destination_source_notice(state) + numbered
     return {
         "answer": _with_notes(numbered, unavailable),
@@ -1921,8 +2058,9 @@ def compose(state):
         "trace": [trace_event("compose", _elapsed_ms(t0),
                               status="degraded" if (degraded or dropped or unbound) else "ok",
                               detail=note or "ok",
-                              kept=len(kept), dropped=len(dropped), unbound=len(unbound),
+                              kept=len(content_lines), dropped=len(dropped), unbound=len(unbound),
                               placeholders=placeholder_count,
+                              structural_lines=structural_count,
                               binding_rate=rate, limitations=limitations,
                               preference_hint=bool(hint and "偏好：" in hint),
                               profile_preferences=normalize_preferences(
