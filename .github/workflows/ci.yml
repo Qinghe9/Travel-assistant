@@ -16,7 +16,7 @@ concurrency:
 jobs:
   lint:
     name: 静态检查（ruff + 语法编译）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -31,7 +31,7 @@ jobs:
 
   smoke:
     name: 离线冒烟（不联网、不需要密钥）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

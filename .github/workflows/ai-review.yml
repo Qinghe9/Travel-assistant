@@ -21,7 +21,7 @@ concurrency:
 jobs:
   static:
     name: 静态审查（注释到 diff）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -37,7 +37,7 @@ jobs:
 
   secret-scan:
     name: 密钥扫描（提交前拦截）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -83,7 +83,7 @@ jobs:
 
   ai:
     name: AI 审查（DeepSeek）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: static
     # fork 来的 PR 拿不到仓库 Secret，直接跳过
