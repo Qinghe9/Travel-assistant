@@ -15,7 +15,11 @@ TEMPLATE_DIR = API_DIR / "templates"
 
 def _page(name: str) -> HTMLResponse:
     path = TEMPLATE_DIR / name
-    return HTMLResponse(path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate",
+                 "Pragma": "no-cache"},
+    )
 
 
 @router.get("/", response_class=HTMLResponse)

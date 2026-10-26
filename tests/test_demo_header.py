@@ -22,9 +22,9 @@ def test_demo_header_is_simplified():
 
 
 def test_frontend_is_split_into_static_assets():
-    assert '<link rel="stylesheet" href="/static/styles.css">' in DEMO_HTML
-    assert '<script src="/static/demo.js" defer></script>' in DEMO_HTML
-    assert '<script src="/static/markdown.js" defer></script>' in DEMO_HTML
+    assert '<link rel="stylesheet" href="/static/styles.css?v=' in DEMO_HTML
+    assert '<script src="/static/demo.js?v=' in DEMO_HTML
+    assert '<script src="/static/markdown.js?v=' in DEMO_HTML
     assert "<style>" not in DEMO_HTML
     assert "function send()" not in DEMO_HTML
     assert ":root{" in DEMO_CSS
