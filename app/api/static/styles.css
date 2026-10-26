@@ -110,6 +110,18 @@ a:hover{text-decoration:underline}
 .who{font-size:10.5px;color:#93a6b0;margin:0 4px 5px}
 .bubble{padding:11px 14px;border-radius:15px;font-size:14px;line-height:1.75;
         white-space:pre-wrap;word-break:break-word}
+.bubble .md-heading{margin:1.05em 0 .55em;line-height:1.45;color:#173b4a}
+.bubble .md-heading:first-child{margin-top:0}
+.bubble .md-h1{font-size:1.25em;font-weight:750;letter-spacing:.01em}
+.bubble .md-h2{font-size:1.1em;font-weight:700;padding-left:9px;
+                border-left:3px solid #5aa9f7}
+.bubble .md-paragraph{margin:.45em 0;white-space:pre-wrap}
+.bubble .md-list{margin:.45em 0;padding-left:1.35em}
+.bubble .md-list li{margin:.28em 0;padding-left:.15em}
+.bubble .md-quote{margin:.75em 0;padding:9px 12px;border-left:3px solid #8fb7d6;
+                  border-radius:0 9px 9px 0;background:rgba(232,242,248,.82);
+                  color:#536d7b;white-space:pre-wrap}
+.bubble strong{font-weight:700;color:#143b4c}
 .row.user .bubble{background:#dceeff;border:1px solid #cfe6ff;border-bottom-right-radius:5px;
                   max-width:min(78%,640px)}
 .acard{background:rgba(255,255,255,.93);border:1px solid rgba(255,255,255,.95);border-radius:15px;

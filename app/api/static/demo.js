@@ -138,28 +138,11 @@ function welcome(){
 }
 
 function renderAnswer(bubble, text, citations){
-  bubble.textContent = '';
-  const parts = String(text || '').split(/(\[\d+\])/g);
-  for (const part of parts){
-    const m = part.match(/^\[(\d+)\]$/);
-    if (m){
-      const sup = document.createElement('sup');
-      sup.className = 'cite';
-      const a = document.createElement('a');
-      a.href = '#cite-' + m[1];
-      a.textContent = m[1];
-      a.title = '查看来源 ' + m[1];
-      a.addEventListener('click', () => {
-        const box = bubble.closest('.acard');
-        const src = box ? box.querySelector('.sources') : null;
-        if (src) src.open = true;
-      });
-      sup.appendChild(a);
-      bubble.appendChild(sup);
-    } else if (part){
-      bubble.appendChild(document.createTextNode(part));
-    }
+  if (window.TravelMarkdown){
+    window.TravelMarkdown.renderMarkdown(bubble, text, document);
+    return;
   }
+  bubble.textContent = String(text || '');
 }
 
 function appendSources(card, citations){
@@ -417,7 +400,10 @@ async function send(){
           addStep(refs, evt.node, evt.latency_ms, evt.detail);
         } else if (evt.type === 'token'){
           msg.content += evt.content || '';
-          refs.bubble.textContent = msg.content;
+          const stable = window.TravelMarkdown
+            ? window.TravelMarkdown.completeMarkdownPrefix(msg.content)
+            : msg.content;
+          renderAnswer(refs.bubble, stable, msg.citations || []);
           refs.bubble.appendChild(caret);
           scrollBottom();
         } else if (evt.type === 'final'){
