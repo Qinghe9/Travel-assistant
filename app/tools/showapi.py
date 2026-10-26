@@ -70,19 +70,29 @@ class ShowAPIHoliday(Provider):
         if date:
             day = str(date).replace("-", "")
             body = _call("/894-6", {"day": day, "needDesc": "1"}, timeout=self.timeout)
-            holiday = body.get("holiday") or ""
-            return make_ok(self.name, {
+            holiday = str(body.get("holiday") or "").strip()
+            week = str(body.get("cn") or "").strip()
+            named_holiday = holiday not in ("", "无", "工作日", "周末")
+            if named_holiday:
+                nature = "节假日（%s）" % holiday
+                date_text = "%s为%s，%s" % (date, week, nature)
+            else:
+                nature = "非节假日"
+                date_text = "%s为%s，非节假日" % (date, week)
+            data = {
                 "日期": date,
-                "星期": body.get("cn") or "",
-                # 接口把普通周末也算 holiday=周末，所以用"是否假日"而不是"法定假日"
-                "是否假日": bool(holiday),
-                "节日": holiday or "工作日",
+                "星期": week,
+                "日期性质": nature,
+                "日期说明": date_text,
                 "类型码": body.get("type") or "",
-                "假期开始": body.get("begin") or "",
-                "假期结束": body.get("end") or "",
                 "说明": body.get("holiday_remark") or "",
                 "数据来源": "万维易源 ShowAPI",
-            }, "获取成功", ttl=self.ttl)
+            }
+            if body.get("begin"):
+                data["假期开始"] = body.get("begin")
+            if body.get("end"):
+                data["假期结束"] = body.get("end")
+            return make_ok(self.name, data, "获取成功", ttl=self.ttl)
         if year:
             body = _call("/894-4", {"year": str(year)}, timeout=self.timeout)
             items = []

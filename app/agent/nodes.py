@@ -1235,6 +1235,63 @@ def _annotate_hotel_distances(results: list, last_turn: dict) -> None:
             item.data = data
 
 
+def _paused_candidates_from_tool_results(results: list) -> dict:
+    paused = {}
+    for item in results or []:
+        data = item.get("data") if isinstance(item, dict) else getattr(item, "data", None)
+        if not isinstance(data, dict):
+            continue
+        source_id = str(data.get("_paused_source_id") or "")
+        for name in data.get("_paused_candidates") or []:
+            paused.setdefault(str(name), source_id)
+    return paused
+
+
+def _filter_paused_tool_results(results: list) -> dict:
+    """从高德列表和坐标点中移除暂停开放 POI，保留私有审计字段供披露。"""
+    paused = {}
+    for item in results or []:
+        if isinstance(item, dict):
+            provider = item.get("provider") or ""
+            data = dict(item.get("data") or {})
+        else:
+            provider = getattr(item, "provider", "") or ""
+            data = dict(getattr(item, "data", None) or {})
+        removed_names = []
+        for key in ("景点", "酒店", "餐饮"):
+            rows = list(data.get(key) or [])
+            if not rows:
+                continue
+            kept = []
+            for row in rows:
+                text = str(row)
+                if _PAUSED_MARKER_RE.search(text):
+                    name = _paused_name(text, "")
+                    if name:
+                        removed_names.append(name)
+                    continue
+                kept.append(row)
+            data[key] = kept
+        if removed_names:
+            removed_names = list(dict.fromkeys(removed_names))
+            data["_points"] = [
+                point for point in (data.get("_points") or [])
+                if str(point.get("name") or "") not in removed_names
+            ]
+            data["_paused_candidates"] = removed_names
+            data["_paused_source_id"] = registry.tool_source_id(
+                provider, getattr(item, "fetched_at", "") if not isinstance(item, dict)
+                else item.get("fetched_at", ""),
+                str(data.get("_source_hint") or ""))
+            for name in removed_names:
+                paused.setdefault(name, data["_paused_source_id"])
+        if isinstance(item, dict):
+            item["data"] = data
+        else:
+            item.data = data
+    return paused
+
+
 def _resolve_tool_place(slots: dict, query: str):
     """把目的地规范化为高德可直接使用的检索中心；失败则保留原槽位。"""
     tool_slots = dict(slots or {})
@@ -1269,6 +1326,7 @@ def call_tools(state):
     slots, geocode_detail, _trace = _resolve_tool_place(
         state.get("slots") or {}, state.get("query") or "")
     results = registry.run_for_intents(intents, slots)
+    paused_candidates = _filter_paused_tool_results(results)
     _annotate_hotel_distances(results, state.get("last_turn") or {})
     tool_evidence = registry.to_evidence(results)
     notes = registry.unavailable_notes(results)
@@ -1298,6 +1356,7 @@ def call_tools(state):
                                      else ("、".join(summaries) + " — 全部成功"),
                               providers=[item.provider for item in results],
                               geocode=geocode_detail,
+                              paused_candidates=list(paused_candidates),
                               unavailable=notes)],
     }
 
@@ -1342,11 +1401,17 @@ def validate_plan(state):
         issues.append("天气属于实时数据，必须来自工具；本次获取失败，不能凭知识库或常识作答")
     if not evidence and not ok_tools:
         issues.append("本轮没有取到任何可用证据")
+    paused_map = _paused_candidates_from_tool_results(tools)
+    paused_map.update(_paused_candidates_from_evidence(evidence))
+    paused_names = list(paused_map)
+    if paused_names:
+        issues.append("暂停开放 POI 已从行程候选剔除：%s" % "、".join(paused_names[:5]))
 
     plan = {"ok": not issues, "issues": issues,
             "evidence_count": len(evidence), "tool_ok": len(ok_tools),
             "intent": intent.value,
-            "intents": [item.value for item in intents]}
+            "intents": [item.value for item in intents],
+            "paused_candidates": paused_names}
     return {"plan": plan, "trace": [trace_event("validate_plan", _elapsed_ms(t0),
                                                 status="ok" if not issues else "warn",
                                                 detail="；".join(issues) or "无冲突",
@@ -1547,8 +1612,17 @@ def _destination_source_notice(state: dict) -> str:
 
 
 _PERIOD_LINE_RE = re.compile(
-    r"^\s*[-*]\s*(?:\*\*)?(上午|下午|晚间)(?:\*\*)?\s*[：:]\s*(.+?)\s*$")
+    r"^\s*[-*]\s*(?:\*\*)?(上午至下午|下午至晚间|上午至晚间|上午|下午|晚间)"
+    r"(?:\*\*)?\s*[：:]\s*(.+?)\s*$")
 _STRUCTURAL_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s+|>\s*)")
+_FIELD_PLACEHOLDER_RE = re.compile(
+    r"^\s*[-*]\s*(?:\*\*)?(上午至下午|下午至晚间|上午至晚间|上午|下午|晚间|交通衔接)"
+    r"(?:\*\*)?\s*[：:]\s*"
+    r"(?:证据(?:中)?未提供|证据未给出|需另行查询|暂无(?:可安排|相关证据)).*$")
+_PLACEHOLDER_PHRASE_RE = re.compile(r"证据(?:中)?未提供|证据未给出|需另行查询")
+_TRANSPORT_LINE_RE = re.compile(
+    r"^\s*[-*]?\s*(?:\*\*)?交通衔接(?:\*\*)?\s*[：:]")
+_PAUSED_MARKER_RE = re.compile(r"暂停开放|暂停营业|闭馆|关闭中|临时关闭")
 
 
 def _coalesce_same_attraction_periods(text: str) -> str:
@@ -1556,7 +1630,7 @@ def _coalesce_same_attraction_periods(text: str) -> str:
     out = []
     for line in (text or "").splitlines():
         match = _PERIOD_LINE_RE.match(line)
-        if not match or match.group(1) == "上午" or not out:
+        if not match or "至" in match.group(1) or not out:
             out.append(line)
             continue
         previous = _PERIOD_LINE_RE.match(out[-1])
@@ -1582,6 +1656,99 @@ def _coalesce_same_attraction_periods(text: str) -> str:
         merged += "；同一景区连续游览，合并为一个景点，不重复计数。"
         out[-1] = merged
     return "\n".join(out)
+
+
+def _remove_field_placeholders(text: str) -> tuple[str, int]:
+    """删除“证据未提供”式条件字段占位行，有真实内容的交通行不受影响。"""
+    kept = []
+    removed = 0
+    for line in (text or "").splitlines():
+        if (_FIELD_PLACEHOLDER_RE.match(line)
+                or ((_PERIOD_LINE_RE.match(line) or _TRANSPORT_LINE_RE.match(line))
+                    and _PLACEHOLDER_PHRASE_RE.search(line))):
+            removed += 1
+            continue
+        kept.append(line)
+    return "\n".join(kept), removed
+
+
+def _paused_name(sentence: str, fallback: str = "") -> str:
+    match = _PAUSED_MARKER_RE.search(sentence or "")
+    if not match:
+        return ""
+    before = (sentence or "")[:match.start()].strip(" \t-*：:，,；;。")
+    before = re.split(r"[（(]", before, 1)[0]
+    before = re.split(r"[，,；;：:]", before)[-1].strip()
+    before = re.sub(r"^(上午|下午|晚间|交通衔接)\s*[：:]?", "", before).strip()
+    before = re.sub(r"(?:目前|现已|当前|近日|已经)$", "", before).strip()
+    generic = ("", "该景点", "景点", "该景区", "景区", "目前", "现已")
+    if before not in generic and 2 <= len(before) <= 40:
+        return before
+    title = str(fallback or "").strip()
+    return title if title and title not in generic else ""
+
+
+def _paused_candidates_from_evidence(evidence: list) -> dict:
+    paused = {}
+    for item in evidence or []:
+        sid = str(item.get("source_id") or "")
+        title = item.get("title") or ""
+        for sentence in re.split(r"(?<=[。！？；;])|\n+", item.get("text") or ""):
+            if not _PAUSED_MARKER_RE.search(sentence):
+                continue
+            name = _paused_name(sentence, title)
+            if name:
+                paused.setdefault(name, sid)
+    return paused
+
+
+def _filter_paused_evidence(evidence: list, excluded_names=()) -> tuple[list, dict]:
+    """暂停/关闭 POI 不送入行程候选；保留其 source_id 供使用说明披露。"""
+    selected, paused = [], {}
+    for item in evidence or []:
+        sentences = [sentence.strip() for sentence in
+                     re.split(r"(?<=[。！？；;])|\n+", item.get("text") or "")
+                     if sentence.strip()]
+        item_names = set()
+        had_pause_marker = any(_PAUSED_MARKER_RE.search(sentence)
+                               for sentence in sentences)
+        for sentence in sentences:
+            if _PAUSED_MARKER_RE.search(sentence):
+                name = _paused_name(sentence, item.get("title") or "")
+                if name:
+                    item_names.add(name)
+                    paused.setdefault(name, str(item.get("source_id") or ""))
+        kept_sentences, item_paused = [], had_pause_marker
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+            if (_PAUSED_MARKER_RE.search(sentence)
+                    or any(name in sentence for name in item_names)
+                    or any(name in sentence for name in excluded_names)):
+                continue
+            kept_sentences.append(sentence.strip())
+        if kept_sentences:
+            clean = dict(item)
+            clean["text"] = "\n".join(kept_sentences)
+            selected.append(clean)
+        elif not item_paused:
+            selected.append(dict(item))
+    return selected, paused
+
+
+def _strip_paused_itinerary_lines(text: str, paused: dict) -> tuple[str, int]:
+    """防御性删除已进入时段行的暂停 POI，并记录其名称和来源。"""
+    kept, removed = [], 0
+    for line in (text or "").splitlines():
+        period = _PERIOD_LINE_RE.match(line)
+        if period and _PAUSED_MARKER_RE.search(period.group(2)):
+            removed += 1
+            name = _paused_name(period.group(2), "")
+            if name and name not in paused:
+                paused[name] = ""
+            continue
+        kept.append(line)
+    return "\n".join(kept), removed
 
 
 _DAY_HEADING_RE = re.compile(
@@ -1856,9 +2023,16 @@ def compose(state):
                                       detail="无证据，拒答")]}
 
     text, note, hint = "", "", ""
+    removed_placeholders = 0
+    removed_paused = 0
     kept, dropped, unbound = [], [], []
     tasks = state.get("tasks") or []
     picked = _evidence_for_prompt(state, limit=8 if len(tasks) > 1 else 4)
+    paused_candidates = _paused_candidates_from_tool_results(
+        state.get("tool_results") or [])
+    picked, evidence_paused = _filter_paused_evidence(
+        picked, excluded_names=paused_candidates)
+    paused_candidates.update(evidence_paused)
     if llm.available():
         try:
             hint = profile_hint(state.get("profile") or {})
@@ -1927,6 +2101,11 @@ def compose(state):
                     "美食任务必须先用本轮高德餐饮工具返回的餐厅名称和地址回答附近吃什么，"
                     "再用 RAG 补充菜品、小吃或饮食文化；不得跳过工具餐厅名单。"
                 )
+            if paused_candidates:
+                hint = (hint + "\n" if hint else "") + (
+                    "以下 POI 已标注暂停开放/关闭，绝不能排入任何上午、下午或晚间时段：%s。"
+                    "只在“使用说明·待确认事项”用一行说明未排入行程；如答案仍出现这些 POI，"
+                    "系统会直接删除该时段行。" % "、".join(list(paused_candidates)[:8]))
             if Intent.ITINERARY in intents:
                 hint = (hint + "\n" if hint else "") + (
                     "同一景区的不同名称变体或相邻 POI 只能出现一次，不得拆成上午/下午两个独立景点；"
@@ -1970,6 +2149,11 @@ def compose(state):
             if Intent.ITINERARY in intents:
                 kept = _insert_itinerary_day_headings(
                     "\n".join(kept), state).splitlines()
+                cleaned, removed_placeholders = _remove_field_placeholders(
+                    "\n".join(kept))
+                cleaned, removed_paused = _strip_paused_itinerary_lines(
+                    cleaned, paused_candidates)
+                kept = cleaned.splitlines()
         except Exception as exc:
             note = "%s；引用校验不可用：%s" % (note, exc)
 
@@ -1985,6 +2169,8 @@ def compose(state):
 
     completion_issues = _answer_completion_issues(state, "\n".join(kept))
     if completion_issues and llm.available():
+        kept_placeholders = removed_placeholders
+        kept_paused = removed_paused
         try:
             retry_rule = (hint + "\n" if hint else "") + (
                 "上一稿存在以下完整性问题：%s。请从头重新完整作答，保留引用编号；"
@@ -2006,12 +2192,22 @@ def compose(state):
                 if Intent.ITINERARY in intents:
                     retry_kept = _insert_itinerary_day_headings(
                         "\n".join(retry_kept), state).splitlines()
+                    retry_text_clean, more_placeholders = _remove_field_placeholders(
+                        "\n".join(retry_kept))
+                    retry_text_clean, more_paused = _strip_paused_itinerary_lines(
+                        retry_text_clean, paused_candidates)
+                    retry_kept = retry_text_clean.splitlines()
+                    removed_placeholders = more_placeholders
+                    removed_paused = more_paused
                 retry_issues = _answer_completion_issues(state, "\n".join(retry_kept))
                 if retry_kept and len(retry_issues) < len(completion_issues):
                     kept = retry_kept
                     dropped, unbound = retry_dropped, retry_unbound
                     completion_issues = retry_issues
                     note = (note + "；" if note else "") + "完整性问题已触发一次重写"
+                else:
+                    removed_placeholders = kept_placeholders
+                    removed_paused = kept_paused
         except Exception as exc:
             note = (note + "；" if note else "") + (
                 "完整性重写失败：%s" % llm.error_of(exc))
@@ -2029,7 +2225,14 @@ def compose(state):
     binding_issue = _binding_below_gate(rate)
     if binding_issue:
         degraded = True
-    numbered, used = _number_citations("\n".join(kept), citations)
+    answer_text = "\n".join(kept)
+    for name, source_id in (paused_candidates or {}).items():
+        if re.search(r"%s.{0,30}暂停开放" % re.escape(name), answer_text):
+            continue
+        mark = " [%s]" % source_id if source_id else ""
+        answer_text += ("\n\n> - **%s**目前暂停开放，已未排入行程%s"
+                        % (name, mark))
+    numbered, used = _number_citations(answer_text, citations)
     numbered = _ensure_task_headings(numbered, state)
     if Intent.ITINERARY in intents:
         numbered = _coalesce_same_attraction_periods(numbered)
@@ -2061,6 +2264,9 @@ def compose(state):
                               kept=len(content_lines), dropped=len(dropped), unbound=len(unbound),
                               placeholders=placeholder_count,
                               structural_lines=structural_count,
+                              placeholder_lines_removed=removed_placeholders,
+                              paused_lines_removed=removed_paused,
+                              paused_candidates=list(paused_candidates),
                               binding_rate=rate, limitations=limitations,
                               preference_hint=bool(hint and "偏好：" in hint),
                               profile_preferences=normalize_preferences(
